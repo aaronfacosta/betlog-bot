@@ -24,7 +24,7 @@ EUR_TO_SOLES = 4
 MENU_KB = ReplyKeyboardMarkup([
     [KeyboardButton("📝 Nueva apuesta"), KeyboardButton("⏳ Pendientes")],
     [KeyboardButton("✅ Resultado"),      KeyboardButton("📊 Hoy")],
-    [KeyboardButton("🔧 Corregir resultado")]
+    [KeyboardButton("🔧 Corregir resultado"), KeyboardButton("❌ Cancelar")]
 ], resize_keyboard=True)
 
 def H():
@@ -94,6 +94,16 @@ async def load(ctx):
 
 async def track_msg(ctx, msg):
     gs(ctx)["bot_msgs"].append(msg)
+
+
+async def delete_old_confirm(gid, bot):
+    """Delete the previous confirmation message for this group if stored."""
+    try:
+        g = await sb_get("bet_groups", f"id=eq.{gid}&select=tg_chat_id,tg_msg_id")
+        if isinstance(g, list) and g and g[0].get("tg_msg_id") and g[0].get("tg_chat_id"):
+            await bot.delete_message(chat_id=g[0]["tg_chat_id"], message_id=g[0]["tg_msg_id"])
+    except:
+        pass
 
 async def clear_bot_msgs(ctx, chat_id, bot):
     s = gs(ctx)
@@ -178,6 +188,7 @@ async def menu_handler(u:Update, ctx):
     if txt == "✅ Resultado":     return await cmd_resultado(u, ctx)
     if txt == "📊 Hoy":           await cmd_hoy(u, ctx); return
     if txt == "🔧 Corregir resultado": return await cmd_corregir(u, ctx)
+    if txt == "❌ Cancelar":      return await cmd_cancelar(u, ctx)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # /nueva
@@ -202,7 +213,6 @@ async def ask_tipster(src, ctx):
         msg=await src.message.reply_text("👤  *Tipster:*", parse_mode="Markdown")
         await track_msg(ctx, msg); return S_TIPSTER
     rows=[[InlineKeyboardButton(t, callback_data=f"tip_{t}")] for t in tips]
-    await clear_bot_msgs(ctx, src.message.chat_id, src.message.get_bot() if hasattr(src.message,'get_bot') else ctx.bot)
     msg=await src.message.reply_text("👤  *Tipster:*", reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
     await track_msg(ctx, msg); return S_TIPSTER
 
@@ -218,7 +228,6 @@ async def r_tip_txt(u:Update, ctx):
 
 async def ask_bookie(src, ctx):
     s=gs(ctx); bks=s["bookies"]
-    await clear_bot_msgs(ctx, src.effective_chat.id, ctx.bot)
     if not bks:
         msg=await src.effective_message.reply_text("🏠  *Bookie:*", parse_mode="Markdown")
         await track_msg(ctx, msg); return S_BOOKIE
@@ -242,7 +251,6 @@ async def r_bk_txt(u:Update, ctx):
 
 async def ask_stake(src, ctx):
     s=gs(ctx); n=s["cur"]["num"]
-    await clear_bot_msgs(ctx, src.effective_chat.id, ctx.bot)
     lbl = f"💶  *Stake #{n}* en euros (×4 soles):" if s["cur"].get("wnx") else f"💰  *Stake #{n}* en soles:"
     msg=await src.effective_message.reply_text(lbl, parse_mode="Markdown")
     await track_msg(ctx, msg); return S_STAKE
@@ -255,7 +263,6 @@ async def r_stake(u:Update, ctx):
     wnx=s["cur"].get("wnx")
     s["cur"]["raw"]=raw; s["cur"]["stake"]=round(raw*EUR_TO_SOLES,2) if wnx else raw
     if wnx: s["cur"]["eur"]=raw
-    await clear_bot_msgs(ctx, u.effective_chat.id, ctx.bot)
     extra = f"_{raw}€ = {fmt(s['cur']['stake'])} soles_\n\n" if wnx else ""
     msg=await u.message.reply_text(
         f"{extra}📊  *Cuota o retorno:*\n\n`@1.90` → cuota\n`285` → retorno total",
@@ -280,7 +287,6 @@ async def r_cuota_ret(u:Update, ctx):
         await track_msg(ctx, msg); return S_CUOTA_RET
     s["tickets"].append(dict(s["cur"]))
     n=len(s["tickets"])
-    await clear_bot_msgs(ctx, u.effective_chat.id, ctx.bot)
     msg=await u.message.reply_text(
         f"✅  Ticket #{n}:  @{s['cur']['cuota']}  ·  pot *{fmt(s['cur']['potencial'])}*  ·  +*{fmt(s['cur']['potencial']-stake)}*\n\n¿Otro ticket?",
         reply_markup=InlineKeyboardMarkup([[
@@ -305,7 +311,6 @@ async def ask_next_inv(src, ctx):
     if not invs or idx>=len(invs): return await show_confirm(src, ctx)
     inv=invs[idx]; wnx=any(t.get("wnx") for t in s["tickets"])
     ts=sum(t["stake"] for t in s["tickets"])
-    await clear_bot_msgs(ctx, src.effective_chat.id, ctx.bot)
     lbl = (f"💶  *{inv['name']}* — inversión en euros\n_Total apuesta: {fmt(ts/EUR_TO_SOLES)}€_\n_(0 = no participa)_"
            if wnx else
            f"💰  *{inv['name']}* — inversión en soles\n_Total apuesta: {fmt(ts)} soles_\n_(0 = no participa)_")
@@ -336,13 +341,13 @@ async def r_inv_txt(u:Update, ctx):
 
 async def show_confirm(src, ctx):
     s=gs(ctx)
-    await clear_bot_msgs(ctx, src.effective_chat.id, ctx.bot)
     msg=await src.effective_message.reply_text(
         build_confirm(s)+"\n\n_¿Confirmar?_",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("✅  Guardar", callback_data="ok_yes"),
-            InlineKeyboardButton("❌  Cancelar", callback_data="ok_no")
-        ]]), parse_mode="Markdown")
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅  Guardar",           callback_data="ok_yes"),
+             InlineKeyboardButton("❌  Cancelar",          callback_data="ok_no")],
+            [InlineKeyboardButton("⚡  Marcar resultado",  callback_data="ok_res")]
+        ]), parse_mode="Markdown")
     await track_msg(ctx, msg); return S_CONFIRM
 
 async def r_confirm(u:Update, ctx):
@@ -350,6 +355,7 @@ async def r_confirm(u:Update, ctx):
     if q.data=="ok_no":
         await clear_bot_msgs(ctx, u.effective_chat.id, ctx.bot)
         rs(ctx); await q.edit_message_text("❌  Cancelado."); return ConversationHandler.END
+    wants_result = (q.data=="ok_res")
     try:
         gid=gen_id()
         await sb_insert("bet_groups",{"id":gid,"date":s["date"],"descr":s["desc"],"status":"pending"})
@@ -368,13 +374,43 @@ async def r_confirm(u:Update, ctx):
                 prop=t["stake"]/ts_total if ts_total>0 else 1/len(s["tickets"])
                 irows.append({"id":gen_id(),"ticket_id":t["_id"],"investor_id":inv["id"],"stake":round(stake*prop,2)})
         if irows: await sb_insert_many("ticket_investors",irows)
-        # Clear intermediate messages, show only final confirmation
         await clear_bot_msgs(ctx, u.effective_chat.id, ctx.bot)
-        await q.edit_message_text(build_confirm(s), parse_mode="Markdown")
-        rs(ctx)
+        chat_id = u.effective_chat.id
+        if wants_result:
+            tickets_saved = await sb_get("tickets", f"group_id=eq.{gid}&order=id.asc")
+            ctx.user_data["res_gid"] = gid
+            ctx.user_data["res_tickets"] = tickets_saved if isinstance(tickets_saved, list) else []
+            ctx.user_data["res_idx"] = 0
+            ctx.user_data["res_returns"] = {}
+            # Save placeholder msg to track
+            conf_msg = await q.edit_message_text(build_confirm(s), parse_mode="Markdown")
+            await sb_patch("bet_groups","id",gid,{"tg_chat_id":chat_id,"tg_msg_id":q.message.message_id})
+            rs(ctx)
+            return await ask_ticket_result(q, ctx)
+        else:
+            conf_msg = await q.edit_message_text(build_confirm(s), parse_mode="Markdown")
+            await sb_patch("bet_groups","id",gid,{"tg_chat_id":chat_id,"tg_msg_id":q.message.message_id})
+            rs(ctx)
     except Exception as e:
         await q.edit_message_text(f"❌  Error: {e}")
     return ConversationHandler.END
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# QUICK RESULT (from confirmation message)
+# ══════════════════════════════════════════════════════════════════════════════
+async def r_quick_result(u:Update, ctx):
+    q=u.callback_query; await q.answer()
+    gid = q.data[3:]
+    # Load tickets fresh from Supabase
+    tickets = await sb_get("tickets", f"group_id=eq.{gid}&order=id.asc")
+    if not isinstance(tickets, list) or not tickets:
+        await q.edit_message_text("⚠️  Sin tickets."); return SR_PICK_TICKET
+    ctx.user_data["res_gid"] = gid
+    ctx.user_data["res_tickets"] = tickets
+    ctx.user_data["res_idx"] = 0
+    ctx.user_data["res_returns"] = {}
+    return await ask_ticket_result(q, ctx)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # /pendientes
@@ -531,9 +567,22 @@ async def r_res_confirm(u:Update, ctx):
                             "date":str(date.today()),"ticket_id":t["id"]})
         await sb_patch("bet_groups","id",gid,{"status":"settled"})
         tr=sum(rets.values()); ts=sum(t["stake"] for t in tickets); pnl=round(tr-ts,2)
-        await q.edit_message_text(
-            f"✅  *Resultado guardado*\n\nP&L:  *{'+' if pnl>=0 else ''}{fmt(pnl)} soles*",
+        # Delete old confirmation, send new one
+        await delete_old_confirm(gid, ctx.bot)
+        lines_res = ["╔══ ✅ *RESULTADO GUARDADO*"]
+        for t in tickets:
+            r=rets.get(t["id"],0); s=t["stake"]
+            lbl="Win ✅" if r>s else ("Void 🔵" if abs(r-s)<0.01 else "Loss ❌")
+            lines_res.append(f"║  {t['tipster']} · {t['casa']}  →  {lbl}  {fmt(r)}S")
+        lines_res.append(f"╠══ P&L  *{'+' if pnl>=0 else ''}{fmt(pnl)} soles*")
+        lines_res.append("╚══")
+        new_msg = await ctx.bot.send_message(
+            chat_id=q.message.chat_id,
+            text="\n".join(lines_res),
             parse_mode="Markdown")
+        await sb_patch("bet_groups","id",gid,{"tg_chat_id":q.message.chat_id,"tg_msg_id":new_msg.message_id})
+        try: await q.message.delete()
+        except: pass
     except Exception as e: await q.edit_message_text(f"❌  Error: {e}")
     return ConversationHandler.END
 
@@ -661,9 +710,22 @@ async def r_corr_confirm(u:Update, ctx):
                             "amount":inv_pnl,"note":"Corrección resultado",
                             "date":str(date.today()),"ticket_id":t["id"]})
         tr=sum(rets.values()); ts=sum(t["stake"] for t in tickets); pnl=round(tr-ts,2)
-        await q.edit_message_text(
-            f"✅  *Corrección guardada*\n\nNuevo P&L:  *{'+' if pnl>=0 else ''}{fmt(pnl)} soles*",
+        gid = ctx.user_data["corr_gid"]
+        await delete_old_confirm(gid, ctx.bot)
+        lines_corr = ["╔══ 🔧 *CORRECCIÓN GUARDADA*"]
+        for t in tickets:
+            r=rets.get(t["id"],0); s=t["stake"]
+            lbl="Win ✅" if r>s else ("Void 🔵" if abs(r-s)<0.01 else "Loss ❌")
+            lines_corr.append(f"║  {t['tipster']} · {t['casa']}  →  {lbl}  {fmt(r)}S")
+        lines_corr.append(f"╠══ P&L  *{'+' if pnl>=0 else ''}{fmt(pnl)} soles*")
+        lines_corr.append("╚══")
+        new_msg = await ctx.bot.send_message(
+            chat_id=q.message.chat_id,
+            text="\n".join(lines_corr),
             parse_mode="Markdown")
+        await sb_patch("bet_groups","id",gid,{"tg_chat_id":q.message.chat_id,"tg_msg_id":new_msg.message_id})
+        try: await q.message.delete()
+        except: pass
     except Exception as e: await q.edit_message_text(f"❌  Error: {e}")
     return ConversationHandler.END
 
@@ -695,6 +757,9 @@ def main():
             S_INV_STAKE:   [CallbackQueryHandler(r_inv_btn,pattern="^inv(0|f)_"),
                             MessageHandler(filters.TEXT&~filters.COMMAND,r_inv_txt)],
             S_CONFIRM:     [CallbackQueryHandler(r_confirm,pattern="^ok_")],
+            SR_PICK_TICKET:[CallbackQueryHandler(r_ticket_result,pattern="^rr_")],
+            SR_SET_RETURN: [MessageHandler(filters.TEXT&~filters.COMMAND,r_manual_return)],
+            SR_PICK_GROUP: [CallbackQueryHandler(r_res_confirm,pattern="^rf_")],
         },
         fallbacks=[CommandHandler("cancelar",cmd_cancelar)],
         allow_reentry=True,
@@ -703,10 +768,12 @@ def main():
     res_conv=ConversationHandler(
         entry_points=[
             CommandHandler("resultado",cmd_resultado),
-            MessageHandler(filters.Regex("^✅ Resultado$"),cmd_resultado)
+            MessageHandler(filters.Regex("^✅ Resultado$"),cmd_resultado),
+            CallbackQueryHandler(r_quick_result, pattern="^qr_"),
         ],
         states={
-            SR_PICK_GROUP: [CallbackQueryHandler(r_res_group,  pattern="^rg_"),
+            SR_PICK_GROUP: [CallbackQueryHandler(r_quick_result,pattern="^qr_"),
+                            CallbackQueryHandler(r_res_group,  pattern="^rg_"),
                             CallbackQueryHandler(r_delete_group,pattern="^rd_"),
                             CallbackQueryHandler(r_delete_confirm,pattern="^rdc_"),
                             CallbackQueryHandler(r_res_confirm, pattern="^rf_")],
@@ -737,7 +804,7 @@ def main():
     app.add_handler(corr_conv)
     app.add_handler(CommandHandler("start",cmd_start))
     app.add_handler(CommandHandler("cancelar",cmd_cancelar))
-    app.add_handler(MessageHandler(filters.Regex("^(⏳ Pendientes|📊 Hoy)$"),menu_handler))
+    app.add_handler(MessageHandler(filters.Regex("^(⏳ Pendientes|📊 Hoy|❌ Cancelar)$"),menu_handler))
     app.add_handler(CommandHandler("pendientes",cmd_pendientes))
     app.add_handler(CommandHandler("hoy",cmd_hoy))
 

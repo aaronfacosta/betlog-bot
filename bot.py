@@ -555,19 +555,32 @@ async def r_res_confirm(u:Update, ctx):
         # Get group description for note
         grp=await sb_get("bet_groups",f"id=eq.{gid}&select=descr")
         grp_desc=(grp[0]["descr"] if isinstance(grp,list) and grp else "Apuesta")
+        total_stake_group = sum(t["stake"] for t in tickets)
+        total_ret_group   = sum(rets.get(t["id"],0) for t in tickets)
+        combined_cuota    = total_ret_group/total_stake_group if total_stake_group>0 else 1
+        # Update all tickets
         for t in tickets:
-            r=rets.get(t["id"],0); s=t["stake"]
+            r=rets.get(t["id"],0)
             await sb_patch("tickets","id",t["id"],{"returned":r,"status":"settled"})
+        # Collect total inv stakes across all tickets
+        inv_group_stakes={}
+        for t in tickets:
             inv_rows=await sb_get("ticket_investors",f"ticket_id=eq.{t['id']}")
             if isinstance(inv_rows,list):
                 for ir in inv_rows:
-                    prop=ir["stake"]/s if s>0 else 0
-                    inv_pnl=round(r*prop-ir["stake"],2)
-                    if inv_pnl!=0:
-                        await sb_insert("investor_movements",{"id":gen_id(),
-                            "investor_id":ir["investor_id"],"type":"bet_result",
-                            "amount":inv_pnl,"note":grp_desc,
-                            "date":str(date.today()),"ticket_id":t["id"]})
+                    if ir["investor_id"] not in inv_group_stakes:
+                        inv_group_stakes[ir["investor_id"]]={"stake":0,"ticket_id":t["id"]}
+                    inv_group_stakes[ir["investor_id"]]["stake"]+=ir["stake"]
+        # One movement per investor for the whole apuesta
+        for inv_id,data in inv_group_stakes.items():
+            inv_stake=data["stake"]
+            inv_ret=round(inv_stake*combined_cuota,2)
+            inv_pnl=round(inv_ret-inv_stake,2)
+            if inv_pnl!=0:
+                await sb_insert("investor_movements",{"id":gen_id(),
+                    "investor_id":inv_id,"type":"bet_result",
+                    "amount":inv_pnl,"note":grp_desc,
+                    "date":str(date.today()),"ticket_id":data["ticket_id"]})
         await sb_patch("bet_groups","id",gid,{"status":"settled"})
         tr=sum(rets.values()); ts=sum(t["stake"] for t in tickets); pnl=round(tr-ts,2)
         # Delete old confirmation, send new one
@@ -698,22 +711,32 @@ async def r_corr_confirm(u:Update, ctx):
     try:
         grp=await sb_get("bet_groups",f"id=eq.{gid}&select=descr")
         grp_desc=(grp[0]["descr"] if isinstance(grp,list) and grp else "Apuesta")
+        total_stake_c = sum(t["stake"] for t in tickets)
+        total_ret_c   = sum(rets.get(t["id"],0) for t in tickets)
+        combined_cuota_c = total_ret_c/total_stake_c if total_stake_c>0 else 1
         for t in tickets:
             r=rets.get(t["id"],0); s=t["stake"]
             await sb_patch("tickets","id",t["id"],{"returned":r,"status":"settled"})
             old_mvs=await sb_get("investor_movements",f"ticket_id=eq.{t['id']}&type=eq.bet_result")
             if isinstance(old_mvs,list):
                 for mv in old_mvs: await sb_delete("investor_movements","id",mv["id"])
-            inv_rows=await sb_get("ticket_investors",f"ticket_id=eq.{t['id']}")
-            if isinstance(inv_rows,list):
-                for ir in inv_rows:
-                    prop=ir["stake"]/s if s>0 else 0
-                    inv_pnl=round(r*prop-ir["stake"],2)
-                    if inv_pnl!=0:
-                        await sb_insert("investor_movements",{"id":gen_id(),
-                            "investor_id":ir["investor_id"],"type":"bet_result",
-                            "amount":inv_pnl,"note":f"Corrección: {grp_desc}",
-                            "date":str(date.today()),"ticket_id":t["id"]})
+        inv_group_stakes_c={}
+        for t_c in tickets:
+            inv_rows_c=await sb_get("ticket_investors",f"ticket_id=eq.{t_c['id']}")
+            if isinstance(inv_rows_c,list):
+                for ir in inv_rows_c:
+                    if ir["investor_id"] not in inv_group_stakes_c:
+                        inv_group_stakes_c[ir["investor_id"]]={"stake":0,"ticket_id":t_c["id"]}
+                    inv_group_stakes_c[ir["investor_id"]]["stake"]+=ir["stake"]
+        for inv_id_c,data_c in inv_group_stakes_c.items():
+            inv_stake_c=data_c["stake"]
+            inv_ret_c=round(inv_stake_c*combined_cuota_c,2)
+            inv_pnl_c=round(inv_ret_c-inv_stake_c,2)
+            if inv_pnl_c!=0:
+                await sb_insert("investor_movements",{"id":gen_id(),
+                    "investor_id":inv_id_c,"type":"bet_result",
+                    "amount":inv_pnl_c,"note":f"Corrección: {grp_desc}",
+                    "date":str(date.today()),"ticket_id":data_c["ticket_id"]})
         tr=sum(rets.values()); ts=sum(t["stake"] for t in tickets); pnl=round(tr-ts,2)
         gid = ctx.user_data["corr_gid"]
         await delete_old_confirm(gid, ctx.bot)

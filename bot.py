@@ -552,6 +552,9 @@ async def r_res_confirm(u:Update, ctx):
     if q.data=="rf_cancel": await q.edit_message_text("❌  Cancelado."); return ConversationHandler.END
     tickets=ctx.user_data["res_tickets"]; rets=ctx.user_data["res_returns"]; gid=ctx.user_data["res_gid"]
     try:
+        # Get group description for note
+        grp=await sb_get("bet_groups",f"id=eq.{gid}&select=descr")
+        grp_desc=(grp[0]["descr"] if isinstance(grp,list) and grp else "Apuesta")
         for t in tickets:
             r=rets.get(t["id"],0); s=t["stake"]
             await sb_patch("tickets","id",t["id"],{"returned":r,"status":"settled"})
@@ -563,7 +566,7 @@ async def r_res_confirm(u:Update, ctx):
                     if inv_pnl!=0:
                         await sb_insert("investor_movements",{"id":gen_id(),
                             "investor_id":ir["investor_id"],"type":"bet_result",
-                            "amount":inv_pnl,"note":"Resultado apuesta",
+                            "amount":inv_pnl,"note":grp_desc,
                             "date":str(date.today()),"ticket_id":t["id"]})
         await sb_patch("bet_groups","id",gid,{"status":"settled"})
         tr=sum(rets.values()); ts=sum(t["stake"] for t in tickets); pnl=round(tr-ts,2)
@@ -693,6 +696,8 @@ async def r_corr_confirm(u:Update, ctx):
     if q.data=="cf_cancel": await q.edit_message_text("❌  Cancelado."); return ConversationHandler.END
     tickets=ctx.user_data["corr_tickets"]; rets=ctx.user_data["corr_returns"]; gid=ctx.user_data["corr_gid"]
     try:
+        grp=await sb_get("bet_groups",f"id=eq.{gid}&select=descr")
+        grp_desc=(grp[0]["descr"] if isinstance(grp,list) and grp else "Apuesta")
         for t in tickets:
             r=rets.get(t["id"],0); s=t["stake"]
             await sb_patch("tickets","id",t["id"],{"returned":r,"status":"settled"})
@@ -707,7 +712,7 @@ async def r_corr_confirm(u:Update, ctx):
                     if inv_pnl!=0:
                         await sb_insert("investor_movements",{"id":gen_id(),
                             "investor_id":ir["investor_id"],"type":"bet_result",
-                            "amount":inv_pnl,"note":"Corrección resultado",
+                            "amount":inv_pnl,"note":f"Corrección: {grp_desc}",
                             "date":str(date.today()),"ticket_id":t["id"]})
         tr=sum(rets.values()); ts=sum(t["stake"] for t in tickets); pnl=round(tr-ts,2)
         gid = ctx.user_data["corr_gid"]

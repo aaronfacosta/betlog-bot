@@ -25,7 +25,7 @@ MENU_KB = ReplyKeyboardMarkup([
     [KeyboardButton("📝 Nueva apuesta"), KeyboardButton("⏳ Pendientes")],
     [KeyboardButton("✅ Resultado"),      KeyboardButton("📊 Hoy")],
     [KeyboardButton("🔧 Corregir resultado")]
-], resize_keyboard=True, persistent=True)
+], resize_keyboard=True)
 
 def H():
     return {"apikey": SUPA_KEY, "Authorization": f"Bearer {SUPA_KEY}",

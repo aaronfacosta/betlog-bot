@@ -391,6 +391,8 @@ async def handle_photo(u: Update, ctx):
         return
     msg = await u.message.reply_text("🔍 Analizando imagen...")
     try:
+        # Load DB first so tipsters are available
+        rs(ctx); await load_db(ctx)
         photo = u.message.photo[-1]
         file = await ctx.bot.get_file(photo.file_id)
         img_bytes = await file.download_as_bytearray()
@@ -401,21 +403,24 @@ async def handle_photo(u: Update, ctx):
         # Convert to free text format for reuse
         lines = [result.get("descripcion","(sin descripción)")]
         for b in result.get("bookies",[]):
-            lines.append(b["bookie"])
+            lines.append(b.get("bookie",""))
             for t in b.get("tickets",[]):
-                if t.get("cuota"):
-                    lines.append(f"{t['monto']} @{t['cuota']}")
-                else:
-                    lines.append(f"{t['monto']}")
+                monto = t.get("monto",0); cuota = t.get("cuota")
+                if cuota: lines.append(f"{monto} @{cuota}")
+                else: lines.append(f"{monto}")
             lines.append("")
-        synthetic_text = "\n".join(lines)
+        synthetic_text = "\n".join(lines).strip()
+        ctx.user_data["photo_text"] = synthetic_text
+        s = gs(ctx)
+        tipster_rows = [[InlineKeyboardButton(t, callback_data=f"photo_tip_{t}")] for t in s["tipsters"]]
+        if not tipster_rows:
+            await msg.edit_text("⚠️ No hay tipsters registrados. Agrégalos en la página web.")
+            return
         await msg.edit_text(
             f"📋 *Detectado:*\n```\n{synthetic_text}\n```\n\nSelecciona tipster para continuar:",
             reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton(t, callback_data=f"photo_tip_{t}")] for t in gs(ctx).get("tipsters",[])] +
-                [[InlineKeyboardButton("❌ Cancelar", callback_data="photo_cancel")]]
+                tipster_rows + [[InlineKeyboardButton("❌ Cancelar", callback_data="photo_cancel")]]
             ), parse_mode="Markdown")
-        ctx.user_data["photo_text"] = synthetic_text
     except Exception as e:
         await msg.edit_text(f"❌ Error: {e}")
 

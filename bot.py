@@ -424,6 +424,44 @@ async def handle_photo(u: Update, ctx):
     except Exception as e:
         await msg.edit_text(f"❌ Error: {e}")
 
+
+async def handle_photo_save(u: Update, ctx):
+    q = u.callback_query; await q.answer()
+    if q.data == "photo_confirm_no":
+        await q.edit_message_text("❌ Cancelado."); return
+    s = gs(ctx)
+    try:
+        group_id = gid(); chat_id = u.effective_chat.id
+        await sb_post("bet_groups",{"id":group_id,"date":s["date"],"descr":s["desc"],"status":"pending"})
+        trows = []; all_tickets_flat = []
+        for b in s["bookies"]:
+            matched_bk = next((x for x in s["bookies_list"]
+                if x.lower()==b["bookie"].lower() or x.lower() in b["bookie"].lower()
+                or b["bookie"].lower() in x.lower()), b["bookie"])
+            for t in b["tickets"]:
+                tid = gid()
+                trows.append({"id":tid,"group_id":group_id,"tipster":s["tipster"],"casa":matched_bk,
+                    "stake":t["stake"],"cuota":t["cuota"],"potencial":t["potencial"],
+                    "status":"pending","returned":None})
+                all_tickets_flat.append({**t,"id":tid,"bookie":matched_bk})
+        await sb_post("tickets", trows)
+        ts_total = sum(t["stake"] for t in all_tickets_flat)
+        irows = []
+        for inv in s["investors"]:
+            inv_stake = s["inv_stakes"].get(inv["name"], 0)
+            if inv_stake <= 0: continue
+            for t in all_tickets_flat:
+                prop = t["stake"]/ts_total if ts_total>0 else 1/len(all_tickets_flat)
+                irows.append({"id":gid(),"ticket_id":t["id"],"investor_id":inv["id"],
+                    "stake":round(inv_stake*prop,2)})
+        if irows: await sb_post("ticket_investors", irows)
+        conf = build_preview(s) + "\n\n✅ *Apuesta registrada*"
+        await q.edit_message_text(conf, parse_mode="Markdown")
+        await sb_patch("bet_groups","id",group_id,{"tg_chat_id":chat_id,"tg_msg_id":q.message.message_id})
+        rs(ctx)
+    except Exception as e:
+        await q.edit_message_text(f"❌ Error: {e}")
+
 async def handle_photo_confirm(u: Update, ctx):
     q = u.callback_query; await q.answer()
     if q.data == "photo_cancel":
@@ -482,8 +520,8 @@ async def handle_photo_bookie(u: Update, ctx):
         preview = build_preview(s)
         await q.edit_message_text(preview + "\n\n¿Confirmar?",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("✅ Confirmar", callback_data="ok_yes"),
-                 InlineKeyboardButton("❌ Cancelar",  callback_data="ok_no")]
+                [InlineKeyboardButton("✅ Confirmar", callback_data="photo_confirm_yes"),
+                 InlineKeyboardButton("❌ Cancelar",  callback_data="photo_confirm_no")]
             ]), parse_mode="Markdown")
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -805,9 +843,11 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_photo_confirm, pattern="^photo_tip_"))
     app.add_handler(CallbackQueryHandler(handle_photo_bookie,  pattern="^photo_bk_"))
     app.add_handler(CallbackQueryHandler(handle_photo_confirm, pattern="^photo_cancel"))
+    app.add_handler(CallbackQueryHandler(handle_photo_save,    pattern="^photo_confirm_"))
 
     print("BetLog Bot running...")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
+    

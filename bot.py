@@ -128,7 +128,9 @@ Notas:
             )
         data = r.json()
         if "choices" not in data:
-            return {"error": f"API error: {data.get('error', {}).get('message', str(data)[:200])}"}
+            err = data.get("error", "")
+            msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+            return {"error": f"API error: {msg[:200]}"}
         text = data["choices"][0]["message"]["content"].strip()
         text = re.sub(r"```(?:json)?", "", text).strip().rstrip("```").strip()
         return json.loads(text)

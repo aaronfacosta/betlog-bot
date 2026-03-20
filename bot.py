@@ -7,7 +7,7 @@ from telegram.ext import (Application, CommandHandler, MessageHandler,
 BOT_TOKEN      = os.environ.get("BOT_TOKEN","")
 SUPA_URL       = os.environ.get("SUPA_URL","")
 SUPA_KEY       = os.environ.get("SUPA_KEY","")
-ANTHROPIC_KEY  = os.environ.get("ANTHROPIC_API_KEY","")
+GEMINI_KEY     = os.environ.get("GEMINI_API_KEY","")
 ALLOWED_IDS    = [int(x) for x in os.environ.get("ALLOWED_USER_IDS","").split(",") if x.strip()]
 EUR            = 4
 TIMEOUT        = 900
@@ -85,9 +85,9 @@ async def delete_old_confirm(group_id, bot):
 
 # ── Claude Vision — extract bet data from photo ────────────────────────────────
 async def analyze_bet_photo(image_bytes: bytes) -> dict:
-    """Send photo to Claude and extract bet data. Returns dict with fields."""
-    if not ANTHROPIC_KEY:
-        return {"error": "ANTHROPIC_API_KEY no configurada en Railway"}
+    """Send photo to Gemini and extract bet data. Returns dict with fields."""
+    if not GEMINI_KEY:
+        return {"error": "GEMINI_API_KEY no configurada en Railway"}
     b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
     prompt = """Analiza esta imagen de una apuesta deportiva y extrae los datos en JSON.
 Responde SOLO con un JSON válido, sin texto adicional, con esta estructura exacta:
@@ -109,30 +109,22 @@ Notas importantes:
     try:
         async with httpx.AsyncClient(timeout=30) as cl:
             r = await cl.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": ANTHROPIC_KEY,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
+                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}",
+                headers={"content-type": "application/json"},
                 json={
-                    "model": "claude-haiku-4-5-20251001",
-                    "max_tokens": 512,
-                    "messages": [{
-                        "role": "user",
-                        "content": [
-                            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64}},
-                            {"type": "text", "text": prompt}
+                    "contents": [{
+                        "parts": [
+                            {"inline_data": {"mime_type": "image/jpeg", "data": b64}},
+                            {"text": prompt}
                         ]
-                    }]
+                    }],
+                    "generationConfig": {"temperature": 0, "maxOutputTokens": 512}
                 }
             )
         data = r.json()
-        text = ""
-        if "content" not in data:
+        if "candidates" not in data:
             return {"error": f"API error: {data.get('error', {}).get('message', str(data)[:200])}"}
-        text = data["content"][0]["text"].strip()
-        # Strip markdown code blocks if present
+        text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
         text = re.sub(r"```(?:json)?", "", text).strip().rstrip("```").strip()
         return json.loads(text)
     except Exception as e:

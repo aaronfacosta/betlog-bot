@@ -1,170 +1,130 @@
-import os, re, uuid, base64, json
-import httpx
+import os, re, uuid, base64, json, httpx
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (Application, CommandHandler, MessageHandler,
-    CallbackQueryHandler, filters)
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 
-# ── Configuración de Variables (Railway) ──────────────────────────────────────
-BOT_TOKEN      = os.environ.get("BOT_TOKEN","")
-SUPA_URL       = os.environ.get("SUPA_URL","")
-SUPA_KEY       = os.environ.get("SUPA_KEY","")
-GEMINI_KEY     = os.environ.get("GEMINI_API_KEY","")
-ALLOWED_IDS    = [int(x) for x in os.environ.get("ALLOWED_USER_IDS","").split(",") if x.strip()]
+# ── 1. VERIFICACIÓN DE VARIABLES AL ARRANQUE ──────────────────────────────────
+BOT_TOKEN   = os.environ.get("BOT_TOKEN", "").strip()
+SUPA_URL    = os.environ.get("SUPA_URL", "").strip()
+SUPA_KEY    = os.environ.get("SUPA_KEY", "").strip()
+GEMINI_KEY  = os.environ.get("GEMINI_API_KEY", "").strip()
+ALLOWED_IDS = [int(x) for x in os.environ.get("ALLOWED_USER_IDS", "").split(",") if x.strip()]
 
-# ── Gemini Vision — Análisis de Apuestas ──────────────────────────────────────
+# ── 2. EL MOTOR DE GEMINI (CON DIAGNÓSTICO DETALLADO) ─────────────────────────
 async def analyze_bet_photo(image_bytes: bytes) -> dict:
-    """Envía foto a Gemini 1.5 Flash usando la API estable (v1)."""
     if not GEMINI_KEY:
-        return {"error": "GEMINI_API_KEY no configurada"}
+        return {"error": "Falta la variable GEMINI_API_KEY en Railway."}
     
-    b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
+    b64_image = base64.b64encode(image_bytes).decode("utf-8")
     
-    prompt = """Analiza esta imagen de una apuesta deportiva.
-Extrae los datos en este formato JSON exacto:
-{
-  "bookie": "nombre de la casa",
-  "descripcion": "evento y mercado",
-  "estado": "ganada / perdida / pendiente",
-  "tickets": [
-    {"monto": 0.0, "cuota": 0.0, "retorno": 0.0}
-  ]
-}
-Notas:
-- 'ganada': si dice Pagado, Ganada, cobrado o tiene check verde.
-- 'perdida': si dice Perdida o tiene X roja.
-- 'pendiente': si no hay resultado aún.
-- Responde SOLO el JSON."""
+    # Probamos con el modelo más estándar del Free Tier
+    model_name = "gemini-1.5-flash"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_KEY}"
+    
+    prompt = (
+        "Analiza esta apuesta. Devuelve un JSON estrictamente con esta estructura: "
+        '{"bookie": "string", "descripcion": "string", "estado": "ganada/perdida/pendiente", '
+        '"tickets": [{"monto": float, "cuota": float, "retorno": float}]}. '
+        "No añadas texto extra."
+    )
+
+    payload = {
+        "contents": [{"parts": [{"inline_data": {"mime_type": "image/jpeg", "data": b64_image}}, {"text": prompt}]}],
+        "generationConfig": {"temperature": 0.1, "response_mime_type": "application/json"}
+    }
 
     try:
-        async with httpx.AsyncClient(timeout=45) as cl:
-            # URL ESTABLE (v1)
-            url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(url, json=payload)
             
-            payload = {
-                "contents": [{
-                    "parts": [
-                        {"inline_data": {"mime_type": "image/jpeg", "data": b64}},
-                        {"text": prompt}
-                    ]
-                }],
-                "generationConfig": {
-                    "temperature": 0.1,
-                    "maxOutputTokens": 800
-                }
-            }
+            # SI GOOGLE DA ERROR (400, 403, 404, etc)
+            if response.status_code != 200:
+                return {"error": f"Google API Error {response.status_code}: {response.text}"}
             
-            r = await cl.post(url, json=payload, headers={"Content-Type": "application/json"})
-            data = r.json()
-
-            if "candidates" not in data:
-                error_msg = data.get("error", {}).get("message", "Error de cuota o API")
-                return {"error": f"Gemini Error: {error_msg}"}
-
-            raw_text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-            clean_json = re.sub(r"```json|```", "", raw_text).strip()
+            data = response.json()
+            
+            if "candidates" not in data or not data["candidates"]:
+                return {"error": f"Respuesta vacía de Gemini: {json.dumps(data)}"}
+            
+            text_out = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+            # Limpieza profunda por si manda Markdown
+            clean_json = re.sub(r"```json|```", "", text_out).strip()
             return json.loads(clean_json)
 
     except Exception as e:
-        return {"error": f"Excepción IA: {str(e)}"}
+        return {"error": f"Fallo en la petición: {str(e)}"}
 
-# ── Helpers Supabase (CORREGIDO) ──────────────────────────────────────────────
-def get_headers():
-    return {
+# ── 3. CONEXIÓN A SUPABASE (SIN ERRORES DE SINTAXIS) ──────────────────────────
+async def save_to_supabase(bet_data: dict):
+    headers = {
         "apikey": SUPA_KEY,
         "Authorization": f"Bearer {SUPA_KEY}",
         "Content-Type": "application/json",
         "Prefer": "return=minimal"
     }
+    payload = {
+        "id": str(uuid.uuid4())[:8],
+        "descr": bet_data.get("descripcion", "Apuesta sin nombre"),
+        "status": "completed" if bet_data.get("estado") == "ganada" else "pending"
+    }
+    async with httpx.AsyncClient() as client:
+        res = await client.post(f"{SUPA_URL}/rest/v1/bet_groups", headers=headers, json=payload)
+        return res.status_code
 
-async def sb_insert(table, data):
-    async with httpx.AsyncClient() as c:
-        url = f"{SUPA_URL}/rest/v1/{table}"
-        response = await c.post(url, headers=get_headers(), json=data)
-        return response.status_code
+# ── 4. LÓGICA DEL BOT ─────────────────────────────────────────────────────────
+async def start(u: Update, c):
+    await u.message.reply_text("🚀 Bot listo. Pásame la foto de tu ticket de apuesta.")
 
-# ── Manejadores de Telegram ───────────────────────────────────────────────────
-async def start(u: Update, ctx):
-    if ALLOWED_IDS and u.effective_user.id not in ALLOWED_IDS: return
-    await u.message.reply_text("👋 ¡BotLog en línea! Envíame una foto de tu ticket de apuesta.")
-
-async def handle_photo(u: Update, ctx):
+async def on_photo(u: Update, c):
     if ALLOWED_IDS and u.effective_user.id not in ALLOWED_IDS: return
     
-    msg = await u.message.reply_text("🔍 Analizando con Gemini 1.5 Flash...")
+    wait_msg = await u.message.reply_text("⚙️ Analizando imagen... (esto puede tardar 10s)")
     
     try:
-        photo = u.message.photo[-1]
-        file = await ctx.bot.get_file(photo.file_id)
-        img_bytes = await file.download_as_bytearray()
+        photo_file = await u.message.photo[-1].get_file()
+        img_bytes = await photo_file.download_as_bytearray()
         
+        # LLAMADA A GEMINI
         res = await analyze_bet_photo(bytes(img_bytes))
         
         if "error" in res:
-            await msg.edit_text(f"❌ {res['error']}")
+            # ESTO TE DIRÁ EXACTAMENTE QUÉ PASA
+            await wait_msg.edit_text(f"❌ **ERROR TÉCNICO:**\n\n`{res['error']}`", parse_mode="Markdown")
             return
 
-        ctx.user_data["last_bet"] = res
+        c.user_data["last_bet"] = res
         
-        # Formatear el resumen para el usuario
         resumen = (
-            f"✅ **Ticket Detectado**\n"
-            f"🏠 Casa: `{res.get('bookie')}`\n"
-            f"📝 Detalle: {res.get('descripcion')}\n"
-            f"📊 Estado: *{res.get('estado').upper()}*\n\n"
+            f"📍 **Casa:** {res.get('bookie')}\n"
+            f"📝 **Evento:** {res.get('descripcion')}\n"
+            f"🏆 **Estado:** {res.get('estado').upper()}\n"
+            f"💰 **Monto:** {res['tickets'][0]['monto']} | **Cuota:** {res['tickets'][0]['cuota']}"
         )
-        for t in res.get("tickets", []):
-            resumen += f"💰 S/ {t.get('monto')} @{t.get('cuota')} → {t.get('retorno')}\n"
+        
+        btns = [[InlineKeyboardButton("✅ Guardar en DB", callback_data="save"),
+                 InlineKeyboardButton("🗑️ Borrar", callback_data="cancel")]]
+        
+        await wait_msg.edit_text(resumen, reply_markup=InlineKeyboardMarkup(btns))
 
-        await msg.edit_text(
-            f"{resumen}\n¿Guardar esta apuesta?",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("💾 Guardar", callback_data="db_save")],
-                [InlineKeyboardButton("🗑 Cancelar", callback_data="db_cancel")]
-            ]),
-            parse_mode="Markdown"
-        )
     except Exception as e:
-        await msg.edit_text(f"❌ Error crítico: {e}")
+        await wait_msg.edit_text(f"❌ Error de sistema: {str(e)}")
 
-async def callback_handler(u: Update, ctx):
-    q = u.callback_query
-    await q.answer()
-    
-    if q.data == "db_save":
-        bet = ctx.user_data.get("last_bet")
-        if not bet:
-            await q.edit_message_text("⚠️ No hay datos para guardar.")
-            return
-        
-        # Inserción en tabla 'bet_groups'
-        group_id = str(uuid.uuid4())[:8]
-        status = await sb_insert("bet_groups", {
-            "id": group_id,
-            "descr": bet.get("descripcion"),
-            "status": "pending" if bet.get("estado") == "pendiente" else "completed"
-        })
-        
-        if status in [200, 201, 204]:
-            await q.edit_message_text(f"🚀 **¡Guardado!** (ID: {group_id})", parse_mode="Markdown")
-        else:
-            await q.edit_message_text(f"⚠️ Error Supabase: Código {status}")
+async def on_callback(u: Update, c):
+    q = u.callback_query; await q.answer()
+    if q.data == "save":
+        status = await save_to_supabase(c.user_data.get("last_bet", {}))
+        txt = "✅ Guardado en Supabase" if status in [200, 201, 204] else f"❌ Error DB: {status}"
+        await q.edit_message_text(txt)
     else:
-        await q.edit_message_text("❌ Registro descartado.")
+        await q.edit_message_text("🗑️ Descartado.")
 
-# ── Main ──────────────────────────────────────────────────────────────────────
-def main():
-    if not BOT_TOKEN:
-        print("Error: BOT_TOKEN no encontrado."); return
-
-    app = Application.builder().token(BOT_TOKEN).build()
-    
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    app.add_handler(CallbackQueryHandler(callback_handler))
-    
-    print("Bot activo en Railway...")
-    app.run_polling()
-
+# ── 5. ARRANQUE ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    main()
-    
+    if not BOT_TOKEN:
+        print("CRÍTICO: No hay BOT_TOKEN.")
+    else:
+        print("Bot iniciado con éxito...")
+        app = Application.builder().token(BOT_TOKEN).build()
+        app.add_handler(CommandHandler("start", start))
+        app.add_handler(MessageHandler(filters.PHOTO, on_photo))
+        app.add_handler(CallbackQueryHandler(on_callback))
+        app.run_polling()

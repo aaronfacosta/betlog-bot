@@ -1,15 +1,16 @@
-import os, re, uuid
+import os, re, uuid, base64, json
 from datetime import date, datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (Application, CommandHandler, MessageHandler,
     CallbackQueryHandler, ConversationHandler, filters)
 
-BOT_TOKEN   = os.environ.get("BOT_TOKEN","")
-SUPA_URL    = os.environ.get("SUPA_URL","")
-SUPA_KEY    = os.environ.get("SUPA_KEY","")
-ALLOWED_IDS = [int(x) for x in os.environ.get("ALLOWED_USER_IDS","").split(",") if x.strip()]
-EUR         = 4
-TIMEOUT     = 900
+BOT_TOKEN      = os.environ.get("BOT_TOKEN","")
+SUPA_URL       = os.environ.get("SUPA_URL","")
+SUPA_KEY       = os.environ.get("SUPA_KEY","")
+ANTHROPIC_KEY  = os.environ.get("ANTHROPIC_API_KEY","")
+ALLOWED_IDS    = [int(x) for x in os.environ.get("ALLOWED_USER_IDS","").split(",") if x.strip()]
+EUR            = 4
+TIMEOUT        = 900
 
 (S_DESC, S_TIPSTER, S_N_BOOKIES, S_BOOKIE, S_TICKETS,
  S_INV, S_INV_MANUAL, S_CONFIRM) = range(8)
@@ -80,6 +81,57 @@ async def delete_old_confirm(group_id, bot):
         if isinstance(g,list) and g and g[0].get("tg_msg_id") and g[0].get("tg_chat_id"):
             await bot.delete_message(chat_id=g[0]["tg_chat_id"], message_id=g[0]["tg_msg_id"])
     except: pass
+
+
+# ── Claude Vision — extract bet data from photo ────────────────────────────────
+async def analyze_bet_photo(image_bytes: bytes) -> dict:
+    """Send photo to Claude and extract bet data. Returns dict with fields."""
+    b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
+    prompt = """Analiza esta imagen de una apuesta deportiva y extrae los datos en JSON.
+Responde SOLO con un JSON válido, sin texto adicional, con esta estructura exacta:
+{
+  "bookie": "nombre de la casa de apuestas o null",
+  "descripcion": "descripción del pick/apuesta en español, concisa",
+  "tickets": [
+    {"monto": 500.0, "cuota": 1.90}
+  ]
+}
+
+Notas importantes:
+- monto: cantidad apostada en la moneda original de la imagen
+- cuota: la cuota decimal (ej: 1.90, 2.50). Si ves el retorno en vez de cuota, calcula cuota = retorno/monto
+- Si hay múltiples selecciones en un parlay, ponlas como un solo ticket con la cuota combinada
+- Si no puedes leer algún campo con certeza, usa null
+- La descripción debe ser corta: "RMA vs Getafe - gana RMA" o "Over 2.5 goles Milan"
+"""
+    try:
+        async with httpx.AsyncClient(timeout=30) as cl:
+            r = await cl.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": ANTHROPIC_KEY,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": "claude-haiku-4-5",
+                    "max_tokens": 512,
+                    "messages": [{
+                        "role": "user",
+                        "content": [
+                            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64}},
+                            {"type": "text", "text": prompt}
+                        ]
+                    }]
+                }
+            )
+        data = r.json()
+        text = data["content"][0]["text"].strip()
+        # Strip markdown code blocks if present
+        text = re.sub(r"```(?:json)?", "", text).strip().rstrip("```").strip()
+        return json.loads(text)
+    except Exception as e:
+        return {"error": str(e)}
 
 # ── State helpers ─────────────────────────────────────────────────────────────
 def gs(ctx):
@@ -221,6 +273,92 @@ def pending_line(g, tickets, inv_totals, inv_names):
         parts = [f"{inv_names.get(iid,'?')}: {fmt(s)}" for iid,s in inv_totals.items()]
         line += f"\n  💼 {' · '.join(parts)}"
     return line
+
+
+async def handle_photo(u: Update, ctx):
+    """User sends a photo — analyze with Claude and pre-fill nueva flow."""
+    if not is_ok(u): return
+    msg = await u.message.reply_text("🔍 Analizando imagen...")
+    try:
+        # Get highest resolution photo
+        photo = u.message.photo[-1]
+        file = await ctx.bot.get_file(photo.file_id)
+        img_bytes = await file.download_as_bytearray()
+        result = await analyze_bet_photo(bytes(img_bytes))
+        if "error" in result:
+            await msg.edit_text(f"❌ No pude analizar la imagen: {result['error']}")
+            return
+        # Store extracted data and start nueva flow pre-filled
+        rs(ctx); await load_db(ctx)
+        s = gs(ctx)
+        # Pre-fill description
+        desc = result.get("descripcion") or ""
+        bookie = result.get("bookie") or ""
+        tickets_raw = result.get("tickets") or []
+        # Build summary for confirmation
+        lines = ["📋 *Datos detectados:*\n"]
+        if desc:   lines.append(f"📝 Descripción: *{desc}*")
+        if bookie: lines.append(f"🏠 Bookie: *{bookie}*")
+        for i, t in enumerate(tickets_raw, 1):
+            m2 = t.get("monto"); cq = t.get("cuota")
+            if m2 and cq:
+                lines.append(f"#{i}  {fmt(float(m2))} @{cq}  → pot {fmt(round(float(m2)*float(cq),2))}")
+        lines.append("\n¿Los datos son correctos?")
+        # Store for use in nueva flow
+        ctx.user_data["photo_prefill"] = {
+            "desc": desc, "bookie": bookie, "tickets": tickets_raw
+        }
+        await msg.edit_text("\n".join(lines),
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ Sí, continuar", callback_data="photo_ok"),
+                InlineKeyboardButton("❌ Reintentar",    callback_data="photo_retry"),
+                InlineKeyboardButton("✏️ Manual",        callback_data="photo_manual"),
+            ]]), parse_mode="Markdown")
+        ctx.user_data["photo_msg_id"] = msg.message_id
+    except Exception as e:
+        await msg.edit_text(f"❌ Error: {e}")
+
+async def handle_photo_confirm(u: Update, ctx):
+    q = u.callback_query; await q.answer()
+    if q.data == "photo_retry":
+        await q.edit_message_text("📸 Envía otra foto del slip.")
+        return
+    if q.data == "photo_manual":
+        await q.edit_message_text("✍️ *Nueva apuesta*\n\n¿Descripción?", parse_mode="Markdown")
+        await track(ctx, q.message)
+        return S_DESC
+    # photo_ok — pre-fill nueva flow
+    prefill = ctx.user_data.get("photo_prefill", {})
+    s = gs(ctx)
+    s["desc"]     = prefill.get("desc", "")
+    s["date"]     = str(date.today())
+    # Try to match bookie from list
+    bookie_raw    = prefill.get("bookie", "")
+    matched_bk    = next((b for b in s["bookies"] if b.lower() in bookie_raw.lower() or bookie_raw.lower() in b.lower()), bookie_raw)
+    s["cur_bookie"] = matched_bk
+    s["wnx"]      = "winamax" in matched_bk.lower()
+    # Build tickets
+    s["tickets"]  = []
+    for t in prefill.get("tickets", []):
+        try:
+            monto = float(t.get("monto", 0))
+            cuota = float(t.get("cuota", 0))
+            if monto > 0 and cuota > 1:
+                pot = round(monto * cuota, 2)
+                if s["wnx"]: monto = round(monto * EUR, 2)
+                s["tickets"].append({"stake": monto, "cuota": cuota, "potencial": pot,
+                    "bookie": matched_bk, "tipster": "", "eur": t.get("monto") if s["wnx"] else None})
+        except: pass
+    if not s["tickets"]:
+        await q.edit_message_text("⚠️ No se detectaron tickets válidos. Continúa manualmente:")
+        return await ask_tipster(q, ctx)
+    # Go to tipster selection (desc already set, bookie+tickets already set — skip to tipster)
+    s["bookie_idx"] = 1  # already have 1 bookie block
+    s["n_bookies"]  = 1
+    await q.edit_message_text(
+        f"✅ Detectado: *{s['desc']}* — {len(s['tickets'])} ticket(s)\n\nSelecciona el tipster:",
+        parse_mode="Markdown")
+    return await ask_tipster(q, ctx)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # /start
@@ -830,6 +968,8 @@ def main():
     app.add_handler(CommandHandler("cancelar", cmd_cancelar))
     app.add_handler(CommandHandler("hoy",      cmd_hoy))
     app.add_handler(MessageHandler(filters.Regex("^(📊 Hoy|❌ Cancelar)$"), menu_handler))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    app.add_handler(CallbackQueryHandler(handle_photo_confirm, pattern="^photo_"))
 
     print("BetLog Bot running...")
     app.run_polling(drop_pending_updates=True)

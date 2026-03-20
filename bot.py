@@ -86,6 +86,8 @@ async def delete_old_confirm(group_id, bot):
 # ── Claude Vision — extract bet data from photo ────────────────────────────────
 async def analyze_bet_photo(image_bytes: bytes) -> dict:
     """Send photo to Claude and extract bet data. Returns dict with fields."""
+    if not ANTHROPIC_KEY:
+        return {"error": "ANTHROPIC_API_KEY no configurada en Railway"}
     b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
     prompt = """Analiza esta imagen de una apuesta deportiva y extrae los datos en JSON.
 Responde SOLO con un JSON válido, sin texto adicional, con esta estructura exacta:

@@ -23,7 +23,6 @@ MENU_KB = ReplyKeyboardMarkup([
 
 BACK = [[InlineKeyboardButton("↩ Atrás", callback_data="back")]]
 
-# ── Supabase ──────────────────────────────────────────────────────────────────
 import httpx
 
 def H():
@@ -48,7 +47,6 @@ async def sb_delete(table, col, val):
     async with httpx.AsyncClient() as c:
         return (await c.delete(f"{SUPA_URL}/rest/v1/{table}?{col}=eq.{val}", headers=H())).status_code
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
 def gid():   return str(uuid.uuid4())[:12].replace("-","")
 def fmt(n):  return f"{n:,.2f}"
 def is_ok(u): return not ALLOWED_IDS or u.effective_user.id in ALLOWED_IDS
@@ -82,10 +80,7 @@ async def delete_old_confirm(group_id, bot):
             await bot.delete_message(chat_id=g[0]["tg_chat_id"], message_id=g[0]["tg_msg_id"])
     except: pass
 
-
-# ── Claude Vision — extract bet data from photo ────────────────────────────────
 async def analyze_bet_photo(image_bytes: bytes) -> dict:
-    """Send photo to Grok Vision and extract bet data."""
     if not GROK_KEY:
         return {"error": "GROK_API_KEY no configurada en Railway"}
     b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
@@ -109,12 +104,9 @@ Notas:
         async with httpx.AsyncClient(timeout=40) as cl:
             r = await cl.post(
                 "https://api.x.ai/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {GROK_KEY}",
-                    "Content-Type": "application/json"
-                },
+                headers={"Authorization": f"Bearer {GROK_KEY}", "Content-Type": "application/json"},
                 json={
-                    "model": "grok-2-vision-1212",
+                    "model": "grok-4",
                     "messages": [{
                         "role": "user",
                         "content": [
@@ -137,7 +129,6 @@ Notas:
     except Exception as e:
         return {"error": f"Excepción: {str(e)}"}
 
-# ── State helpers ─────────────────────────────────────────────────────────────
 def gs(ctx):
     ctx.user_data.setdefault("s",{
         "desc":"","date":str(date.today()),
@@ -166,12 +157,11 @@ async def load_db(ctx):
     bk  = await sb_get("bookies","order=name.asc")
     iv  = await sb_get("investors","order=name.asc")
     its = await sb_get("investor_tipster_stakes","")
-    s["tipsters"]            = [t["name"] for t in tp]  if isinstance(tp,list)  else []
-    s["bookies"]             = [b["name"] for b in bk]  if isinstance(bk,list)  else []
-    s["investors"]           = iv                        if isinstance(iv,list)  else []
-    s["inv_tipster_stakes"]  = its                       if isinstance(its,list) else []
+    s["tipsters"]           = [t["name"] for t in tp]  if isinstance(tp,list)  else []
+    s["bookies"]            = [b["name"] for b in bk]  if isinstance(bk,list)  else []
+    s["investors"]          = iv                        if isinstance(iv,list)  else []
+    s["inv_tipster_stakes"] = its                       if isinstance(its,list) else []
 
-# ── Ticket parser ─────────────────────────────────────────────────────────────
 def parse_tickets(text, wnx=False):
     tickets, errors = [], []
     for i, line in enumerate(text.strip().splitlines(), 1):
@@ -195,13 +185,11 @@ def parse_tickets(text, wnx=False):
         tickets.append({"stake":stake,"cuota":cuota,"potencial":pot,"eur":raw if wnx else None})
     return tickets, errors
 
-# ── Combined cuota ────────────────────────────────────────────────────────────
 def cc(tickets):
     ts = sum(t["stake"] for t in tickets)
     tp = sum(t["potencial"] for t in tickets)
     return round(tp/ts, 3) if ts > 0 else 0
 
-# ── Auto investor stakes ──────────────────────────────────────────────────────
 def get_auto_inv_stakes(s, tipster_name, total_stake):
     result = {}
     for inv in s.get("investors",[]):
@@ -213,7 +201,6 @@ def get_auto_inv_stakes(s, tipster_name, total_stake):
             result[inv["name"]] = {"stake":stake, "pct":float(match["percentage"]), "id":inv["id"]}
     return result
 
-# ── Build messages ────────────────────────────────────────────────────────────
 def build_confirm(s):
     tix   = s["tickets"]
     ts    = sum(t["stake"] for t in tix)
@@ -221,16 +208,12 @@ def build_confirm(s):
     cuota = cc(tix)
     d     = s.get("_dt") or now_str()
     SEP   = "╠═══════════════════════"
-    lines = ["╔═══════════════════════",
-             f"║ 📅 {d}",
-             f"║ 📋 {s['desc']}",
-             SEP]
+    lines = ["╔═══════════════════════", f"║ 📅 {d}", f"║ 📋 {s['desc']}", SEP]
     for i,t in enumerate(tix,1):
         eur = f" ({t['eur']}€)" if t.get("eur") else ""
         lines.append(f"║ #{i} {t.get('tipster','')} · {t.get('bookie','')}")
         lines.append(f"║    {fmt(t['stake'])}{eur} @{t['cuota']} → pot {fmt(t['potencial'])}")
-    lines += [SEP,
-              f"║ @{cuota}  {fmt(ts)} apostado  +{fmt(tp-ts)}"]
+    lines += [SEP, f"║ @{cuota}  {fmt(ts)} apostado  +{fmt(tp-ts)}"]
     invs = {k:v for k,v in s.get("inv_stakes",{}).items() if v>0}
     if invs:
         for name,stake in invs.items():
@@ -248,10 +231,7 @@ def build_result_msg(desc, tickets, rets, inv_group=None, comb_c=1, orig_date=No
     else:             status = "🔵 *Apuesta void*"
     d   = orig_date or now_str()
     SEP = "╠═══════════════════════"
-    lines = ["╔═══════════════════════",
-             f"║ 📅 {d}",
-             f"║ 📋 {desc}",
-             SEP]
+    lines = ["╔═══════════════════════", f"║ 📅 {d}", f"║ 📋 {desc}", SEP]
     for t in tickets:
         r = rets.get(t["id"],0); sk = t["stake"]
         lbl = "✅" if r > sk else ("🔵" if abs(r-sk) < 0.01 else "❌")
@@ -259,32 +239,16 @@ def build_result_msg(desc, tickets, rets, inv_group=None, comb_c=1, orig_date=No
     lines += [SEP, f"║ P&L: *{'+' if pnl>=0 else ''}{fmt(pnl)}*"]
     if inv_group:
         for iid, data in inv_group.items():
-            inv_stake = data["stake"]
-            inv_ret   = round(inv_stake * comb_c, 2)
-            inv_pnl   = round(inv_ret - inv_stake, 2)
-            name      = data.get("name","?")
+            inv_pnl = round(data["stake"] * comb_c - data["stake"], 2)
             if abs(inv_pnl) >= 0.01:
-                lines.append(f"║ 💼 {name}: {'+' if inv_pnl>=0 else ''}{fmt(inv_pnl)}")
+                lines.append(f"║ 💼 {data.get('name','?')}: {'+' if inv_pnl>=0 else ''}{fmt(inv_pnl)}")
     lines += ["╚═══════════════════════", status]
     return "\n".join(lines)
 
-def pending_line(g, tickets, inv_totals, inv_names):
-    ts    = sum(t["stake"] for t in tickets)
-    tp    = sum(t["potencial"] for t in tickets)
-    cuota = round(tp/ts, 3) if ts > 0 else 0
-    line  = f"▸ *{g['descr'] or '(sin desc)'}*  {fmt(ts)} @{cuota} · pot {fmt(tp)}"
-    if inv_totals:
-        parts = [f"{inv_names.get(iid,'?')}: {fmt(s)}" for iid,s in inv_totals.items()]
-        line += f"\n  💼 {' · '.join(parts)}"
-    return line
-
-
 async def handle_photo(u: Update, ctx):
-    """User sends a photo — analyze with Claude and pre-fill nueva flow."""
     if not is_ok(u): return
     msg = await u.message.reply_text("🔍 Analizando imagen...")
     try:
-        # Get highest resolution photo
         photo = u.message.photo[-1]
         file = await ctx.bot.get_file(photo.file_id)
         img_bytes = await file.download_as_bytearray()
@@ -292,14 +256,11 @@ async def handle_photo(u: Update, ctx):
         if "error" in result:
             await msg.edit_text(f"❌ No pude analizar la imagen: {result['error']}")
             return
-        # Store extracted data and start nueva flow pre-filled
         rs(ctx); await load_db(ctx)
         s = gs(ctx)
-        # Pre-fill description
         desc = result.get("descripcion") or ""
         bookie = result.get("bookie") or ""
         tickets_raw = result.get("tickets") or []
-        # Build summary for confirmation
         lines = ["📋 *Datos detectados:*\n"]
         if desc:   lines.append(f"📝 Descripción: *{desc}*")
         if bookie: lines.append(f"🏠 Bookie: *{bookie}*")
@@ -308,17 +269,13 @@ async def handle_photo(u: Update, ctx):
             if m2 and cq:
                 lines.append(f"#{i}  {fmt(float(m2))} @{cq}  → pot {fmt(round(float(m2)*float(cq),2))}")
         lines.append("\n¿Los datos son correctos?")
-        # Store for use in nueva flow
-        ctx.user_data["photo_prefill"] = {
-            "desc": desc, "bookie": bookie, "tickets": tickets_raw
-        }
+        ctx.user_data["photo_prefill"] = {"desc": desc, "bookie": bookie, "tickets": tickets_raw}
         await msg.edit_text("\n".join(lines),
             reply_markup=InlineKeyboardMarkup([[
                 InlineKeyboardButton("✅ Sí, continuar", callback_data="photo_ok"),
                 InlineKeyboardButton("❌ Reintentar",    callback_data="photo_retry"),
                 InlineKeyboardButton("✏️ Manual",        callback_data="photo_manual"),
             ]]), parse_mode="Markdown")
-        ctx.user_data["photo_msg_id"] = msg.message_id
     except Exception as e:
         await msg.edit_text(f"❌ Error: {e}")
 
@@ -331,22 +288,18 @@ async def handle_photo_confirm(u: Update, ctx):
         await q.edit_message_text("✍️ *Nueva apuesta*\n\n¿Descripción?", parse_mode="Markdown")
         await track(ctx, q.message)
         return S_DESC
-    # photo_ok — pre-fill nueva flow
     prefill = ctx.user_data.get("photo_prefill", {})
     s = gs(ctx)
-    s["desc"]     = prefill.get("desc", "")
-    s["date"]     = str(date.today())
-    # Try to match bookie from list
-    bookie_raw    = prefill.get("bookie", "")
-    matched_bk    = next((b for b in s["bookies"] if b.lower() in bookie_raw.lower() or bookie_raw.lower() in b.lower()), bookie_raw)
+    s["desc"]  = prefill.get("desc", "")
+    s["date"]  = str(date.today())
+    bookie_raw = prefill.get("bookie", "")
+    matched_bk = next((b for b in s["bookies"] if b.lower() in bookie_raw.lower() or bookie_raw.lower() in b.lower()), bookie_raw)
     s["cur_bookie"] = matched_bk
-    s["wnx"]      = "winamax" in matched_bk.lower()
-    # Build tickets
-    s["tickets"]  = []
+    s["wnx"] = "winamax" in matched_bk.lower()
+    s["tickets"] = []
     for t in prefill.get("tickets", []):
         try:
-            monto = float(t.get("monto", 0))
-            cuota = float(t.get("cuota", 0))
+            monto = float(t.get("monto", 0)); cuota = float(t.get("cuota", 0))
             if monto > 0 and cuota > 1:
                 pot = round(monto * cuota, 2)
                 if s["wnx"]: monto = round(monto * EUR, 2)
@@ -356,25 +309,16 @@ async def handle_photo_confirm(u: Update, ctx):
     if not s["tickets"]:
         await q.edit_message_text("⚠️ No se detectaron tickets válidos. Continúa manualmente:")
         return await ask_tipster(q, ctx)
-    # Go to tipster selection (desc already set, bookie+tickets already set — skip to tipster)
-    s["bookie_idx"] = 1  # already have 1 bookie block
-    s["n_bookies"]  = 1
+    s["bookie_idx"] = 1; s["n_bookies"] = 1
     await q.edit_message_text(
         f"✅ Detectado: *{s['desc']}* — {len(s['tickets'])} ticket(s)\n\nSelecciona el tipster:",
         parse_mode="Markdown")
     return await ask_tipster(q, ctx)
 
-# ══════════════════════════════════════════════════════════════════════════════
-# /start
-# ══════════════════════════════════════════════════════════════════════════════
 async def cmd_start(u:Update, ctx):
     if not is_ok(u): return
-    await u.message.reply_text("👋 *BetLog*\nUsa los botones del menú.",
-        parse_mode="Markdown", reply_markup=MENU_KB)
+    await u.message.reply_text("👋 *BetLog*\nUsa los botones del menú.", parse_mode="Markdown", reply_markup=MENU_KB)
 
-# ══════════════════════════════════════════════════════════════════════════════
-# /nueva
-# ══════════════════════════════════════════════════════════════════════════════
 async def cmd_nueva(u:Update, ctx):
     if not is_ok(u): return
     rs(ctx); await load_db(ctx)
@@ -427,8 +371,7 @@ async def r_n_bookies_txt(u:Update, ctx):
     return await ask_bookie(u, ctx)
 
 async def ask_bookie(src, ctx):
-    s   = gs(ctx)
-    idx = s["bookie_idx"]; n = s["n_bookies"]
+    s = gs(ctx); idx = s["bookie_idx"]; n = s["n_bookies"]
     await clear(ctx, src.effective_chat.id, ctx.bot)
     rows = []; row = []
     for b in s["bookies"]:
@@ -468,76 +411,61 @@ async def ask_tickets(src, ctx):
     await track(ctx, msg); return S_TICKETS
 
 async def r_tickets(u:Update, ctx):
-    s = gs(ctx)
-    await try_del(u.message)
+    s = gs(ctx); await try_del(u.message)
     raw_tickets, errors = parse_tickets(u.message.text, wnx=s["wnx"])
     if errors:
-        msg = await u.message.reply_text(
-            "⚠️ Corrige y reenvía:\n" + "\n".join(errors),
+        msg = await u.message.reply_text("⚠️ Corrige y reenvía:\n" + "\n".join(errors),
             parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(BACK))
         await track(ctx, msg); return S_TICKETS
     for t in raw_tickets:
         t["bookie"] = s["cur_bookie"]; t["tipster"] = s.get("tipster","")
     s["tickets"].extend(raw_tickets)
-    s["_last_bookie"] = s["cur_bookie"]
-    s["bookie_idx"] += 1
-    if s["bookie_idx"] < s["n_bookies"]:
-        return await ask_bookie(u, ctx)
+    s["_last_bookie"] = s["cur_bookie"]; s["bookie_idx"] += 1
+    if s["bookie_idx"] < s["n_bookies"]: return await ask_bookie(u, ctx)
     return await ask_inv(u, ctx)
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Investors
-# ══════════════════════════════════════════════════════════════════════════════
 async def ask_inv(src, ctx):
-    s          = gs(ctx)
-    tipster    = s.get("tipster","")
+    s = gs(ctx)
+    tipster = s.get("tipster","")
     total_stake = sum(t["stake"] for t in s.get("tickets",[]))
-    auto       = get_auto_inv_stakes(s, tipster, total_stake)
+    auto = get_auto_inv_stakes(s, tipster, total_stake)
     if auto:
         for name, data in auto.items():
             s["inv_stakes"][name] = data["stake"]
         all_defined = all(inv["name"] in auto for inv in s.get("investors",[]))
-        if all_defined:
-            return await show_confirm(src, ctx)
+        if all_defined: return await show_confirm(src, ctx)
         s["_auto_stakes"] = auto
         s["_undef_inv"]   = [inv for inv in s["investors"] if inv["name"] not in auto]
         s["_undef_idx"]   = 0
         return await ask_next_undef(src, ctx)
-    # No auto stakes — show manual screen
     await clear(ctx, src.effective_chat.id, ctx.bot)
-    ts    = sum(t["stake"] for t in s["tickets"])
-    invs  = s["investors"]; names = [i["name"] for i in invs]
-    rows  = []
-    if len(names) >= 1:
-        rows.append([InlineKeyboardButton(f"Solo {names[0]}", callback_data="inv_solo0")])
+    ts = sum(t["stake"] for t in s["tickets"])
+    invs = s["investors"]; names = [i["name"] for i in invs]
+    rows = []
+    if len(names) >= 1: rows.append([InlineKeyboardButton(f"Solo {names[0]}", callback_data="inv_solo0")])
     if len(names) >= 2:
         rows.append([InlineKeyboardButton(f"Solo {names[1]}", callback_data="inv_solo1")])
-        rows.append([InlineKeyboardButton("50/50",          callback_data="inv_5050"),
+        rows.append([InlineKeyboardButton("50/50", callback_data="inv_5050"),
                      InlineKeyboardButton("Sin inversores", callback_data="inv_none")])
     else:
         rows.append([InlineKeyboardButton("Sin inversores", callback_data="inv_none")])
     rows += BACK
-    wnx  = any(t.get("eur") for t in s["tickets"])
+    wnx = any(t.get("eur") for t in s["tickets"])
     note = f"Total: {fmt(ts)} soles" + (f" = {fmt(ts/EUR)}€" if wnx else "")
-    msg  = await src.effective_message.reply_text(
+    msg = await src.effective_message.reply_text(
         f"💼 *Inversores*\n_{note}_\n\nO escribe: `Alonso 200 RV 50`",
         reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
     await track(ctx, msg); return S_INV
 
 async def ask_next_undef(src, ctx):
-    s    = gs(ctx)
-    invs = s.get("_undef_inv", [])
-    idx  = s.get("_undef_idx", 0)
-    if idx >= len(invs):
-        return await show_confirm(src, ctx)
-    inv  = invs[idx]
-    auto = s.get("_auto_stakes", {})
+    s = gs(ctx); invs = s.get("_undef_inv",[]); idx = s.get("_undef_idx",0)
+    if idx >= len(invs): return await show_confirm(src, ctx)
+    inv = invs[idx]; auto = s.get("_auto_stakes",{})
     await clear(ctx, src.effective_chat.id, ctx.bot)
     auto_lines = "\n".join([f"  💼 {n}: {fmt(d['stake'])} ({d['pct']}%)" for n,d in auto.items()])
     msg = await src.effective_message.reply_text(
         f"💼 *{inv['name']}* no tiene stake definido para este tipster.\n\n"
-        f"_Definidos automáticamente:_\n{auto_lines}\n\n"
-        f"¿Agregar a *{inv['name']}*?",
+        f"_Definidos automáticamente:_\n{auto_lines}\n\n¿Agregar a *{inv['name']}*?",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ Sí, agregar",   callback_data=f"undef_add_{inv['id']}"),
              InlineKeyboardButton("❌ No participar", callback_data=f"undef_skip_{inv['id']}")],
@@ -547,23 +475,17 @@ async def ask_next_undef(src, ctx):
 
 async def r_undef_btn(u:Update, ctx):
     q = u.callback_query; await q.answer(); s = gs(ctx)
-    if q.data == "back":
-        return await ask_inv(u, ctx)
-    invs = s.get("_undef_inv", []); idx = s.get("_undef_idx", 0)
-    if idx >= len(invs):
-        return await show_confirm(q, ctx)
+    if q.data == "back": return await ask_inv(u, ctx)
+    invs = s.get("_undef_inv",[]); idx = s.get("_undef_idx",0)
+    if idx >= len(invs): return await show_confirm(q, ctx)
     inv = invs[idx]
     if q.data == f"undef_skip_{inv['id']}":
-        s["_undef_idx"] += 1
-        return await ask_next_undef(q, ctx)
+        s["_undef_idx"] += 1; return await ask_next_undef(q, ctx)
     elif q.data == f"undef_add_{inv['id']}":
         await clear(ctx, u.effective_chat.id, ctx.bot)
-        msg = await q.message.reply_text(
-            f"💰 Stake de *{inv['name']}* (soles):",
+        msg = await q.message.reply_text(f"💰 Stake de *{inv['name']}* (soles):",
             reply_markup=InlineKeyboardMarkup(BACK), parse_mode="Markdown")
-        await track(ctx, msg)
-        s["_adding_undef"] = inv["name"]
-        return S_INV_MANUAL
+        await track(ctx, msg); s["_adding_undef"] = inv["name"]; return S_INV_MANUAL
 
 async def r_inv_btn(u:Update, ctx):
     q = u.callback_query; await q.answer(); s = gs(ctx)
@@ -571,34 +493,28 @@ async def r_inv_btn(u:Update, ctx):
     ts = sum(t["stake"] for t in s["tickets"])
     invs = s["investors"]; names = [i["name"] for i in invs]
     if   q.data == "inv_none":  s["inv_stakes"] = {}
-    elif q.data == "inv_solo0" and names:   s["inv_stakes"] = {names[0]: ts}
+    elif q.data == "inv_solo0" and names: s["inv_stakes"] = {names[0]: ts}
     elif q.data == "inv_solo1" and len(names)>1: s["inv_stakes"] = {names[1]: ts}
     elif q.data == "inv_5050"  and len(names)>=2:
-        half = round(ts/2, 2); s["inv_stakes"] = {names[0]: half, names[1]: half}
+        half = round(ts/2,2); s["inv_stakes"] = {names[0]:half, names[1]:half}
     return await show_confirm(u, ctx)
 
 async def r_inv_txt(u:Update, ctx):
-    s = gs(ctx); txt = u.message.text.strip()
-    await try_del(u.message)
-    invs = s["investors"]; inv_stakes = {}
-    parts = txt.split(); i = 0
+    s = gs(ctx); txt = u.message.text.strip(); await try_del(u.message)
+    invs = s["investors"]; inv_stakes = {}; parts = txt.split(); i = 0
     while i < len(parts) - 1:
         name_part = parts[i].lower()
-        try:
-            amount = float(parts[i+1].replace(",",".")); assert amount >= 0
+        try: amount = float(parts[i+1].replace(",",".")); assert amount >= 0
         except: i += 1; continue
-        matched = next((inv["name"] for inv in invs
-            if inv["name"].lower().startswith(name_part)
+        matched = next((inv["name"] for inv in invs if inv["name"].lower().startswith(name_part)
             or name_part in inv["name"].lower()), None)
         if matched: inv_stakes[matched] = amount
         i += 2
     if not inv_stakes:
-        msg = await u.message.reply_text(
-            "⚠️ No entendí. Ej: `Alonso 200 RV 50`\nO usa los botones.",
+        msg = await u.message.reply_text("⚠️ No entendí. Ej: `Alonso 200 RV 50`\nO usa los botones.",
             parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(BACK))
         await track(ctx, msg); return S_INV
-    s["inv_stakes"] = inv_stakes
-    return await show_confirm(u, ctx)
+    s["inv_stakes"] = inv_stakes; return await show_confirm(u, ctx)
 
 async def r_inv_manual(u:Update, ctx):
     s = gs(ctx)
@@ -607,15 +523,13 @@ async def r_inv_manual(u:Update, ctx):
     await try_del(u.message)
     name = s.get("_adding_undef","")
     if name: s["inv_stakes"][name] = amt; s["_adding_undef"] = ""
-    s["_undef_idx"] += 1
-    return await ask_next_undef(u.message, ctx)
+    s["_undef_idx"] += 1; return await ask_next_undef(u.message, ctx)
 
 async def show_confirm(src, ctx):
     s = gs(ctx)
     await clear(ctx, src.effective_chat.id, ctx.bot)
     s["_dt"] = now_str()
-    msg = await src.effective_message.reply_text(
-        build_confirm(s),
+    msg = await src.effective_message.reply_text(build_confirm(s),
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ Guardar",  callback_data="ok_yes"),
              InlineKeyboardButton("❌ Cancelar", callback_data="ok_no")],
@@ -625,7 +539,7 @@ async def show_confirm(src, ctx):
 
 async def r_confirm(u:Update, ctx):
     q = u.callback_query; await q.answer(); s = gs(ctx)
-    if q.data == "back":   return await ask_inv(u, ctx)
+    if q.data == "back": return await ask_inv(u, ctx)
     if q.data == "ok_no":
         await clear(ctx, u.effective_chat.id, ctx.bot)
         rs(ctx); await q.edit_message_text("❌ Cancelado."); return ConversationHandler.END
@@ -636,18 +550,15 @@ async def r_confirm(u:Update, ctx):
         for t in s["tickets"]:
             tid = gid(); t["_id"] = tid
             trows.append({"id":tid,"group_id":group_id,"tipster":t["tipster"],"casa":t["bookie"],
-                "stake":t["stake"],"cuota":t["cuota"],"potencial":t["potencial"],
-                "status":"pending","returned":None})
+                "stake":t["stake"],"cuota":t["cuota"],"potencial":t["potencial"],"status":"pending","returned":None})
         await sb_post("tickets", trows)
-        ts_total = sum(t["stake"] for t in s["tickets"])
-        irows = []
+        ts_total = sum(t["stake"] for t in s["tickets"]); irows = []
         for inv in s["investors"]:
             stake = s["inv_stakes"].get(inv["name"], 0)
             if stake <= 0: continue
             for t in s["tickets"]:
                 prop = t["stake"]/ts_total if ts_total > 0 else 1/len(s["tickets"])
-                irows.append({"id":gid(),"ticket_id":t["_id"],"investor_id":inv["id"],
-                    "stake":round(stake*prop, 2)})
+                irows.append({"id":gid(),"ticket_id":t["_id"],"investor_id":inv["id"],"stake":round(stake*prop,2)})
         if irows: await sb_post("ticket_investors", irows)
         await clear(ctx, chat_id, ctx.bot)
         await q.edit_message_text(build_confirm(s), parse_mode="Markdown")
@@ -657,13 +568,9 @@ async def r_confirm(u:Update, ctx):
         await q.edit_message_text(f"❌ Error: {e}")
     return ConversationHandler.END
 
-# ══════════════════════════════════════════════════════════════════════════════
-# /pendientes
-# ══════════════════════════════════════════════════════════════════════════════
 async def cmd_pendientes(u:Update, ctx):
     if not is_ok(u): return
-    await try_del(u.message)
-    return await show_pending_list(u.message, ctx)
+    await try_del(u.message); return await show_pending_list(u.message, ctx)
 
 async def show_pending_list(src, ctx):
     groups   = await sb_get("bet_groups","status=eq.pending&order=date.desc")
@@ -673,38 +580,31 @@ async def show_pending_list(src, ctx):
     if not isinstance(groups,list) or not groups:
         await src.reply_text("✅ Sin pendientes."); return P_LIST
     tmap = {}
-    for t in (tickets if isinstance(tickets,list) else []):
-        tmap.setdefault(t["group_id"],[]).append(t)
+    for t in (tickets if isinstance(tickets,list) else []): tmap.setdefault(t["group_id"],[]).append(t)
     imap = {}
-    for ir in (inv_rows if isinstance(inv_rows,list) else []):
-        imap.setdefault(ir["ticket_id"],[]).append(ir)
+    for ir in (inv_rows if isinstance(inv_rows,list) else []): imap.setdefault(ir["ticket_id"],[]).append(ir)
     inv_names = {i["id"]:i["name"] for i in (investors if isinstance(investors,list) else [])}
     ctx.user_data.update({"pd_groups":groups,"pd_tmap":tmap,"pd_imap":imap,"pd_inv_names":inv_names})
     rows = []
     for g in groups[:10]:
         ts = tmap.get(g["id"],[]); total_s = sum(t["stake"] for t in ts)
         total_p = sum(t["potencial"] for t in ts)
-        cuota   = round(total_p/total_s,3) if total_s > 0 else 0
-        rows.append([InlineKeyboardButton(
-            f"▸ {g['descr'] or '(sin desc)'}  {fmt(total_s)} @{cuota}",
+        cuota = round(total_p/total_s,3) if total_s > 0 else 0
+        rows.append([InlineKeyboardButton(f"▸ {g['descr'] or '(sin desc)'}  {fmt(total_s)} @{cuota}",
             callback_data=f"pd_{g['id']}")])
-    await src.reply_text("⏳ *Pendientes:*",
-        reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
+    await src.reply_text("⏳ *Pendientes:*", reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
     return P_LIST
 
 async def r_pd_select(u:Update, ctx):
     q = u.callback_query; await q.answer()
-    gid_val  = q.data[3:]
-    groups   = ctx.user_data.get("pd_groups",[])
-    g        = next((x for x in groups if x["id"]==gid_val), None)
+    gid_val = q.data[3:]; groups = ctx.user_data.get("pd_groups",[])
+    g = next((x for x in groups if x["id"]==gid_val), None)
     if not g: await q.edit_message_text("⚠️ No encontrado."); return ConversationHandler.END
-    tmap     = ctx.user_data.get("pd_tmap",{})
-    imap     = ctx.user_data.get("pd_imap",{})
-    inv_names= ctx.user_data.get("pd_inv_names",{})
-    ts       = tmap.get(gid_val,[])
-    total_s  = sum(t["stake"] for t in ts)
-    total_p  = sum(t["potencial"] for t in ts)
-    cuota    = round(total_p/total_s,3) if total_s > 0 else 0
+    tmap = ctx.user_data.get("pd_tmap",{}); imap = ctx.user_data.get("pd_imap",{})
+    inv_names = ctx.user_data.get("pd_inv_names",{})
+    ts = tmap.get(gid_val,[]); total_s = sum(t["stake"] for t in ts)
+    total_p = sum(t["potencial"] for t in ts)
+    cuota = round(total_p/total_s,3) if total_s > 0 else 0
     inv_totals = {}
     for t in ts:
         for ir in imap.get(t["id"],[]):
@@ -731,31 +631,25 @@ async def r_pd_select(u:Update, ctx):
 
 async def r_pd_action(u:Update, ctx):
     q = u.callback_query; await q.answer()
-    if q.data == "pr_back":
-        return await show_pending_list(q.message, ctx)
+    if q.data == "pr_back": return await show_pending_list(q.message, ctx)
     if q.data == "pr_del":
-        g = next((x for x in ctx.user_data.get("pd_groups",[])
-                  if x["id"]==ctx.user_data.get("pd_gid","")), {})
+        g = next((x for x in ctx.user_data.get("pd_groups",[]) if x["id"]==ctx.user_data.get("pd_gid","")), {})
         await q.edit_message_text(f"⚠️ ¿Eliminar *{g.get('descr','')}*?",
             reply_markup=InlineKeyboardMarkup([[
                 InlineKeyboardButton("🗑 Sí", callback_data="pdel_yes"),
                 InlineKeyboardButton("↩ No",  callback_data="pdel_no")
             ]]), parse_mode="Markdown")
         return P_DEL
-    tickets = ctx.user_data.get("pd_tickets",[])
-    action  = q.data[3:]
-    ctx.user_data["pd_returns"] = {}
-    ctx.user_data["pd_idx"]     = 0
+    tickets = ctx.user_data.get("pd_tickets",[]); action = q.data[3:]
+    ctx.user_data["pd_returns"] = {}; ctx.user_data["pd_idx"] = 0
     if action in ("win","loss","void"):
         for t in tickets:
-            if   action=="win":  ctx.user_data["pd_returns"][t["id"]] = t["potencial"]
+            if action=="win":    ctx.user_data["pd_returns"][t["id"]] = t["potencial"]
             elif action=="loss": ctx.user_data["pd_returns"][t["id"]] = 0
             elif action=="void": ctx.user_data["pd_returns"][t["id"]] = t["stake"]
-        if len(tickets) == 1:
-            return await save_result(q, ctx)
+        if len(tickets) == 1: return await save_result(q, ctx)
         return await show_result_summary(q, ctx)
-    elif action == "exact":
-        return await ask_exact_ticket(q, ctx)
+    elif action == "exact": return await ask_exact_ticket(q, ctx)
 
 async def ask_exact_ticket(src, ctx):
     tickets = ctx.user_data.get("pd_tickets",[]); idx = ctx.user_data.get("pd_idx",0)
@@ -763,11 +657,10 @@ async def ask_exact_ticket(src, ctx):
     t = tickets[idx]
     await edit_or_new(src,
         f"✏️ *#{idx+1}/{len(tickets)}*  {t['tipster']} · {t['casa']}\n"
-        f"{fmt(t['stake'])} @{t['cuota']} · pot {fmt(t['potencial'])}\n\n"
-        f"Win / Loss / Void o monto exacto retornado:", [[
-        InlineKeyboardButton("✅ Win",   callback_data="ex_win"),
-        InlineKeyboardButton("❌ Loss",  callback_data="ex_loss"),
-        InlineKeyboardButton("🔵 Void",  callback_data="ex_void"),
+        f"{fmt(t['stake'])} @{t['cuota']} · pot {fmt(t['potencial'])}\n\nWin / Loss / Void o monto exacto:", [[
+        InlineKeyboardButton("✅ Win",  callback_data="ex_win"),
+        InlineKeyboardButton("❌ Loss", callback_data="ex_loss"),
+        InlineKeyboardButton("🔵 Void", callback_data="ex_void"),
     ]])
     return P_EXACT
 
@@ -778,8 +671,7 @@ async def r_exact_btn(u:Update, ctx):
     if   q.data == "ex_win":  ctx.user_data["pd_returns"][t["id"]] = t["potencial"]
     elif q.data == "ex_loss": ctx.user_data["pd_returns"][t["id"]] = 0
     elif q.data == "ex_void": ctx.user_data["pd_returns"][t["id"]] = t["stake"]
-    ctx.user_data["pd_idx"] += 1
-    return await ask_exact_ticket(q, ctx)
+    ctx.user_data["pd_idx"] += 1; return await ask_exact_ticket(q, ctx)
 
 async def r_exact_txt(u:Update, ctx):
     try: ret = float(u.message.text.strip().replace(",",".")); assert ret >= 0
@@ -787,8 +679,7 @@ async def r_exact_txt(u:Update, ctx):
     await try_del(u.message)
     tickets = ctx.user_data.get("pd_tickets",[]); idx = ctx.user_data.get("pd_idx",0)
     ctx.user_data["pd_returns"][tickets[idx]["id"]] = ret
-    ctx.user_data["pd_idx"] += 1
-    return await ask_exact_ticket(u.message, ctx)
+    ctx.user_data["pd_idx"] += 1; return await ask_exact_ticket(u.message, ctx)
 
 async def show_result_summary(src, ctx):
     tickets = ctx.user_data.get("pd_tickets",[]); rets = ctx.user_data.get("pd_returns",{})
@@ -811,8 +702,8 @@ async def r_result_confirm(u:Update, ctx):
     return await save_result(q, ctx)
 
 async def save_result(src, ctx):
-    tickets  = ctx.user_data.get("pd_tickets",[]); rets = ctx.user_data.get("pd_returns",{})
-    gid_val  = ctx.user_data.get("pd_gid","")
+    tickets = ctx.user_data.get("pd_tickets",[]); rets = ctx.user_data.get("pd_returns",{})
+    gid_val = ctx.user_data.get("pd_gid","")
     try:
         grp = await sb_get("bet_groups",f"id=eq.{gid_val}&select=descr,date")
         desc = grp[0]["descr"] if isinstance(grp,list) and grp else "Apuesta"
@@ -821,7 +712,7 @@ async def save_result(src, ctx):
                      datetime.now().strftime("%H:%M")) if orig_d else None
         ts_total = sum(t["stake"] for t in tickets)
         tr_total = sum(rets.get(t["id"],0) for t in tickets)
-        comb_c   = tr_total/ts_total if ts_total > 0 else 1
+        comb_c = tr_total/ts_total if ts_total > 0 else 1
         for t in tickets:
             await sb_patch("tickets","id",t["id"],{"returned":rets.get(t["id"],0),"status":"settled"})
         inv_group = {}
@@ -836,20 +727,18 @@ async def save_result(src, ctx):
                             "name":inv_names_db.get(ir["investor_id"],"?")}
                     inv_group[ir["investor_id"]]["stake"] += ir["stake"]
         for iid, data in inv_group.items():
-            inv_stake = data["stake"]; inv_ret = round(inv_stake*comb_c,2)
-            inv_pnl   = round(inv_ret - inv_stake, 2)
+            inv_pnl = round(data["stake"] * comb_c - data["stake"], 2)
             if abs(inv_pnl) < 0.01: continue
             await sb_post("investor_movements",{"id":gid(),"investor_id":iid,
                 "type":"bet_result","amount":inv_pnl,"note":desc,
                 "date":str(date.today()),"ticket_id":data["ticket_id"]})
         await sb_patch("bet_groups","id",gid_val,{"status":"settled"})
         await delete_old_confirm(gid_val, ctx.bot)
-        chat_id   = src.message.chat_id if hasattr(src,"message") else src.effective_chat.id
-        result_msg = build_result_msg(desc, tickets, rets,
-            inv_group=inv_group, comb_c=comb_c, orig_date=orig_date)
-        new_msg = await ctx.bot.send_message(chat_id=chat_id, text=result_msg, parse_mode="Markdown")
-        await sb_patch("bet_groups","id",gid_val,
-            {"tg_chat_id":chat_id,"tg_msg_id":new_msg.message_id})
+        chat_id = src.message.chat_id if hasattr(src,"message") else src.effective_chat.id
+        new_msg = await ctx.bot.send_message(chat_id=chat_id,
+            text=build_result_msg(desc, tickets, rets, inv_group=inv_group, comb_c=comb_c, orig_date=orig_date),
+            parse_mode="Markdown")
+        await sb_patch("bet_groups","id",gid_val,{"tg_chat_id":chat_id,"tg_msg_id":new_msg.message_id})
         try:
             if hasattr(src,"message"): await src.message.delete()
         except: pass
@@ -859,8 +748,7 @@ async def save_result(src, ctx):
 
 async def r_pd_del_confirm(u:Update, ctx):
     q = u.callback_query; await q.answer()
-    if q.data == "pdel_no":
-        await q.edit_message_text("❌ Cancelado."); return ConversationHandler.END
+    if q.data == "pdel_no": await q.edit_message_text("❌ Cancelado."); return ConversationHandler.END
     gid_val = ctx.user_data.get("pd_gid","")
     try:
         tix = await sb_get("tickets",f"group_id=eq.{gid_val}")
@@ -876,13 +764,10 @@ async def r_pd_del_confirm(u:Update, ctx):
     except Exception as e: await q.edit_message_text(f"❌ Error: {e}")
     return ConversationHandler.END
 
-# ══════════════════════════════════════════════════════════════════════════════
-# /hoy
-# ══════════════════════════════════════════════════════════════════════════════
 async def cmd_hoy(u:Update, ctx):
     if not is_ok(u): return
     await try_del(u.message)
-    today  = str(date.today())
+    today = str(date.today())
     groups = await sb_get("bet_groups",f"date=eq.{today}&order=created_at.desc")
     if not isinstance(groups,list) or not groups:
         await u.message.reply_text("📭 Sin apuestas hoy."); return
@@ -890,12 +775,12 @@ async def cmd_hoy(u:Update, ctx):
     for t in (tall if isinstance(tall,list) else []): tmap.setdefault(t["group_id"],[]).append(t)
     lines = [f"📊 *{today}*\n"]; total = 0; total_pnl = 0
     for g in groups:
-        ts    = tmap.get(g["id"],[]); gs_s = sum(t["stake"] for t in ts); total += gs_s
-        icon  = "⏳" if g["status"]=="pending" else "✅"
+        ts = tmap.get(g["id"],[]); gs_s = sum(t["stake"] for t in ts); total += gs_s
+        icon = "⏳" if g["status"]=="pending" else "✅"
         pnl_str = ""
         if g["status"] == "settled":
             ret = sum((t.get("returned") or 0) for t in ts)
-            p   = round(ret-gs_s,2); total_pnl += p
+            p = round(ret-gs_s,2); total_pnl += p
             pnl_str = f"  *{'+' if p>=0 else ''}{fmt(p)}*"
         cuota = round(sum(t["potencial"] for t in ts)/gs_s,3) if gs_s > 0 else 0
         lines.append(f"{icon} *{g['descr'] or '(sin desc)'}*  {fmt(gs_s)} @{cuota}{pnl_str}")
@@ -903,9 +788,6 @@ async def cmd_hoy(u:Update, ctx):
     if total_pnl != 0: lines.append(f"📈 P&L  *{'+' if total_pnl>=0 else ''}{fmt(total_pnl)}*")
     await u.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Cancel / menu
-# ══════════════════════════════════════════════════════════════════════════════
 async def cmd_cancelar(u:Update, ctx):
     await clear(ctx, u.effective_chat.id, ctx.bot)
     rs(ctx); await u.message.reply_text("❌ Cancelado.", reply_markup=MENU_KB)
@@ -918,9 +800,6 @@ async def menu_handler(u:Update, ctx):
     if txt == "📊 Hoy":           await cmd_hoy(u, ctx)
     if txt == "❌ Cancelar":      return await cmd_cancelar(u, ctx)
 
-# ══════════════════════════════════════════════════════════════════════════════
-# MAIN
-# ══════════════════════════════════════════════════════════════════════════════
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
@@ -937,9 +816,9 @@ def main():
                           MessageHandler(filters.TEXT&~filters.COMMAND, r_bookie_txt)],
             S_TICKETS:   [CallbackQueryHandler(r_bookie, pattern="^back"),
                           MessageHandler(filters.TEXT&~filters.COMMAND, r_tickets)],
-            S_INV:       [CallbackQueryHandler(r_inv_btn,   pattern="^inv_"),
-                          CallbackQueryHandler(r_undef_btn,  pattern="^undef_"),
-                          CallbackQueryHandler(r_inv_btn,   pattern="^back"),
+            S_INV:       [CallbackQueryHandler(r_inv_btn,  pattern="^inv_"),
+                          CallbackQueryHandler(r_undef_btn, pattern="^undef_"),
+                          CallbackQueryHandler(r_inv_btn,  pattern="^back"),
                           MessageHandler(filters.TEXT&~filters.COMMAND, r_inv_txt)],
             S_INV_MANUAL:[CallbackQueryHandler(r_undef_btn, pattern="^back"),
                           MessageHandler(filters.TEXT&~filters.COMMAND, r_inv_manual)],

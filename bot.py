@@ -7,7 +7,7 @@ from telegram.ext import (Application, CommandHandler, MessageHandler,
 BOT_TOKEN      = os.environ.get("BOT_TOKEN","")
 SUPA_URL       = os.environ.get("SUPA_URL","")
 SUPA_KEY       = os.environ.get("SUPA_KEY","")
-GROK_KEY       = os.environ.get("GROK_API_KEY","")
+OPENAI_KEY     = os.environ.get("OPENAI_API_KEY","")
 ALLOWED_IDS    = [int(x) for x in os.environ.get("ALLOWED_USER_IDS","").split(",") if x.strip()]
 EUR            = 4
 TIMEOUT        = 900
@@ -47,8 +47,8 @@ async def sb_delete(table, col, val):
     async with httpx.AsyncClient() as c:
         return (await c.delete(f"{SUPA_URL}/rest/v1/{table}?{col}=eq.{val}", headers=H())).status_code
 
-def gid():   return str(uuid.uuid4())[:12].replace("-","")
-def fmt(n):  return f"{n:,.2f}"
+def gid():    return str(uuid.uuid4())[:12].replace("-","")
+def fmt(n):   return f"{n:,.2f}"
 def is_ok(u): return not ALLOWED_IDS or u.effective_user.id in ALLOWED_IDS
 def now_str(): return datetime.now().strftime("%d-%m-%Y · %H:%M")
 
@@ -81,11 +81,11 @@ async def delete_old_confirm(group_id, bot):
     except: pass
 
 async def analyze_bet_photo(image_bytes: bytes) -> dict:
-    if not GROK_KEY:
-        return {"error": "GROK_API_KEY no configurada en Railway"}
+    if not OPENAI_KEY:
+        return {"error": "OPENAI_API_KEY no configurada en Railway"}
     b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
     prompt = """Analiza esta imagen de una apuesta deportiva y extrae los datos en JSON.
-Responde ÚNICAMENTE con el objeto JSON, sin explicaciones ni bloques de código markdown.
+Responde UNICAMENTE con el objeto JSON, sin explicaciones ni bloques de codigo markdown.
 Estructura exacta:
 {
   "bookie": "nombre de la casa de apuestas",
@@ -98,19 +98,19 @@ Notas:
 - monto: cantidad apostada en la moneda original de la imagen
 - cuota: cuota decimal. Si ves retorno en vez de cuota, calcula cuota = retorno / monto
 - Si es Winamax, usa el monto en euros
-- Si hay múltiples selecciones, ponlas como un solo ticket con la cuota combinada
+- Si hay multiples selecciones, ponlas como un solo ticket con la cuota combinada
 - Si no puedes leer un campo con certeza, usa null"""
     try:
         async with httpx.AsyncClient(timeout=40) as cl:
             r = await cl.post(
-                "https://api.x.ai/v1/chat/completions",
-                headers={"Authorization": f"Bearer {GROK_KEY}", "Content-Type": "application/json"},
+                "https://api.openai.com/v1/chat/completions",
+                headers={"Authorization": f"Bearer {OPENAI_KEY}", "Content-Type": "application/json"},
                 json={
-                    "model": "grok-4",
+                    "model": "gpt-4o-mini",
                     "messages": [{
                         "role": "user",
                         "content": [
-                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}", "detail": "low"}},
                             {"type": "text", "text": prompt}
                         ]
                     }],
@@ -120,14 +120,13 @@ Notas:
             )
         data = r.json()
         if "choices" not in data:
-            err = data.get("error", "")
-            msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
-            return {"error": f"API error: {msg[:200]}"}
+            err = data.get("error", {})
+            return {"error": f"API error: {err.get('message', str(err))[:200]}"}
         text = data["choices"][0]["message"]["content"].strip()
         text = re.sub(r"```(?:json)?", "", text).strip().rstrip("```").strip()
         return json.loads(text)
     except Exception as e:
-        return {"error": f"Excepción: {str(e)}"}
+        return {"error": f"Excepcion: {str(e)}"}
 
 def gs(ctx):
     ctx.user_data.setdefault("s",{
@@ -169,18 +168,18 @@ def parse_tickets(text, wnx=False):
         if not line: continue
         m = re.match(r'^([\d.,]+)\s+@?([\d.,]+)$', line)
         if not m:
-            errors.append(f"Línea {i}: `{line}` — usa `500 @1.90` o `500 285`")
+            errors.append(f"Linea {i}: `{line}` - usa `500 @1.90` o `500 285`")
             continue
         raw  = float(m.group(1).replace(",","."))
         val  = float(m.group(2).replace(",","."))
         stake = round(raw * EUR, 2) if wnx else raw
         has_at = "@" in line
         if has_at:
-            if val <= 1: errors.append(f"Línea {i}: cuota debe ser > 1"); continue
+            if val <= 1: errors.append(f"Linea {i}: cuota debe ser > 1"); continue
             cuota = val; pot = round(stake * cuota, 2)
         else:
             raw_ret = val * EUR if wnx else val
-            if raw_ret <= stake: errors.append(f"Línea {i}: retorno debe ser > stake"); continue
+            if raw_ret <= stake: errors.append(f"Linea {i}: retorno debe ser > stake"); continue
             pot = round(raw_ret, 2); cuota = round(pot / stake, 3)
         tickets.append({"stake":stake,"cuota":cuota,"potencial":pot,"eur":raw if wnx else None})
     return tickets, errors
@@ -262,7 +261,7 @@ async def handle_photo(u: Update, ctx):
         bookie = result.get("bookie") or ""
         tickets_raw = result.get("tickets") or []
         lines = ["📋 *Datos detectados:*\n"]
-        if desc:   lines.append(f"📝 Descripción: *{desc}*")
+        if desc:   lines.append(f"📝 Descripcion: *{desc}*")
         if bookie: lines.append(f"🏠 Bookie: *{bookie}*")
         for i, t in enumerate(tickets_raw, 1):
             m2 = t.get("monto"); cq = t.get("cuota")
@@ -272,7 +271,7 @@ async def handle_photo(u: Update, ctx):
         ctx.user_data["photo_prefill"] = {"desc": desc, "bookie": bookie, "tickets": tickets_raw}
         await msg.edit_text("\n".join(lines),
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("✅ Sí, continuar", callback_data="photo_ok"),
+                InlineKeyboardButton("✅ Si, continuar", callback_data="photo_ok"),
                 InlineKeyboardButton("❌ Reintentar",    callback_data="photo_retry"),
                 InlineKeyboardButton("✏️ Manual",        callback_data="photo_manual"),
             ]]), parse_mode="Markdown")
@@ -282,10 +281,10 @@ async def handle_photo(u: Update, ctx):
 async def handle_photo_confirm(u: Update, ctx):
     q = u.callback_query; await q.answer()
     if q.data == "photo_retry":
-        await q.edit_message_text("📸 Envía otra foto del slip.")
+        await q.edit_message_text("📸 Envia otra foto del slip.")
         return
     if q.data == "photo_manual":
-        await q.edit_message_text("✍️ *Nueva apuesta*\n\n¿Descripción?", parse_mode="Markdown")
+        await q.edit_message_text("✍️ *Nueva apuesta*\n\n¿Descripcion?", parse_mode="Markdown")
         await track(ctx, q.message)
         return S_DESC
     prefill = ctx.user_data.get("photo_prefill", {})
@@ -307,7 +306,7 @@ async def handle_photo_confirm(u: Update, ctx):
                     "bookie": matched_bk, "tipster": "", "eur": t.get("monto") if s["wnx"] else None})
         except: pass
     if not s["tickets"]:
-        await q.edit_message_text("⚠️ No se detectaron tickets válidos. Continúa manualmente:")
+        await q.edit_message_text("⚠️ No se detectaron tickets validos. Continua manualmente:")
         return await ask_tipster(q, ctx)
     s["bookie_idx"] = 1; s["n_bookies"] = 1
     await q.edit_message_text(
@@ -317,13 +316,13 @@ async def handle_photo_confirm(u: Update, ctx):
 
 async def cmd_start(u:Update, ctx):
     if not is_ok(u): return
-    await u.message.reply_text("👋 *BetLog*\nUsa los botones del menú.", parse_mode="Markdown", reply_markup=MENU_KB)
+    await u.message.reply_text("👋 *BetLog*\nUsa los botones del menu.", parse_mode="Markdown", reply_markup=MENU_KB)
 
 async def cmd_nueva(u:Update, ctx):
     if not is_ok(u): return
     rs(ctx); await load_db(ctx)
     await try_del(u.message)
-    msg = await u.message.reply_text("✍️ *Nueva apuesta*\n\n¿Descripción?", parse_mode="Markdown")
+    msg = await u.message.reply_text("✍️ *Nueva apuesta*\n\n¿Descripcion?", parse_mode="Markdown")
     await track(ctx, msg)
     return S_DESC
 
@@ -353,7 +352,7 @@ async def r_tipster_txt(u:Update, ctx):
 async def ask_n_bookies(src, ctx):
     await clear(ctx, src.effective_chat.id, ctx.bot)
     rows = [[InlineKeyboardButton(str(n), callback_data=f"nb_{n}") for n in range(1,6)]] + BACK
-    msg  = await src.effective_message.reply_text("🏠 *¿Cuántas bookies?*",
+    msg  = await src.effective_message.reply_text("🏠 *¿Cuantas bookies?*",
         reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
     await track(ctx, msg); return S_N_BOOKIES
 
@@ -365,7 +364,7 @@ async def r_n_bookies(u:Update, ctx):
 
 async def r_n_bookies_txt(u:Update, ctx):
     try: n = int(u.message.text.strip()); assert 1 <= n <= 10
-    except: await u.message.reply_text("⚠️ Número entre 1 y 10:"); return S_N_BOOKIES
+    except: await u.message.reply_text("⚠️ Numero entre 1 y 10:"); return S_N_BOOKIES
     await try_del(u.message)
     s = gs(ctx); s["n_bookies"] = n; s["bookie_idx"] = 0
     return await ask_bookie(u, ctx)
@@ -403,10 +402,10 @@ async def r_bookie_txt(u:Update, ctx):
 async def ask_tickets(src, ctx):
     s = gs(ctx)
     await clear(ctx, src.effective_chat.id, ctx.bot)
-    wnx_note = f"\n_Winamax: ingresa euros (×{EUR} = soles)_" if s["wnx"] else ""
+    wnx_note = f"\n_Winamax: ingresa euros (x{EUR} = soles)_" if s["wnx"] else ""
     msg = await src.effective_message.reply_text(
         f"📋 *{s['cur_bookie']}* — tickets:{wnx_note}\n\n"
-        f"Una línea por ticket:\n`500 @1.90`  cuota\n`500 285`  retorno total",
+        f"Una linea por ticket:\n`500 @1.90`  cuota\n`500 285`  retorno total",
         reply_markup=InlineKeyboardMarkup(BACK), parse_mode="Markdown")
     await track(ctx, msg); return S_TICKETS
 
@@ -414,7 +413,7 @@ async def r_tickets(u:Update, ctx):
     s = gs(ctx); await try_del(u.message)
     raw_tickets, errors = parse_tickets(u.message.text, wnx=s["wnx"])
     if errors:
-        msg = await u.message.reply_text("⚠️ Corrige y reenvía:\n" + "\n".join(errors),
+        msg = await u.message.reply_text("⚠️ Corrige y rerenvia:\n" + "\n".join(errors),
             parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(BACK))
         await track(ctx, msg); return S_TICKETS
     for t in raw_tickets:
@@ -465,9 +464,9 @@ async def ask_next_undef(src, ctx):
     auto_lines = "\n".join([f"  💼 {n}: {fmt(d['stake'])} ({d['pct']}%)" for n,d in auto.items()])
     msg = await src.effective_message.reply_text(
         f"💼 *{inv['name']}* no tiene stake definido para este tipster.\n\n"
-        f"_Definidos automáticamente:_\n{auto_lines}\n\n¿Agregar a *{inv['name']}*?",
+        f"_Definidos automaticamente:_\n{auto_lines}\n\n¿Agregar a *{inv['name']}*?",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ Sí, agregar",   callback_data=f"undef_add_{inv['id']}"),
+            [InlineKeyboardButton("✅ Si, agregar",   callback_data=f"undef_add_{inv['id']}"),
              InlineKeyboardButton("❌ No participar", callback_data=f"undef_skip_{inv['id']}")],
             BACK[0]
         ]), parse_mode="Markdown")
@@ -511,7 +510,7 @@ async def r_inv_txt(u:Update, ctx):
         if matched: inv_stakes[matched] = amount
         i += 2
     if not inv_stakes:
-        msg = await u.message.reply_text("⚠️ No entendí. Ej: `Alonso 200 RV 50`\nO usa los botones.",
+        msg = await u.message.reply_text("⚠️ No entendi. Ej: `Alonso 200 RV 50`\nO usa los botones.",
             parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(BACK))
         await track(ctx, msg); return S_INV
     s["inv_stakes"] = inv_stakes; return await show_confirm(u, ctx)
@@ -519,7 +518,7 @@ async def r_inv_txt(u:Update, ctx):
 async def r_inv_manual(u:Update, ctx):
     s = gs(ctx)
     try: amt = float(u.message.text.strip().replace(",",".")); assert amt >= 0
-    except: await u.message.reply_text("⚠️ Número válido:"); return S_INV_MANUAL
+    except: await u.message.reply_text("⚠️ Numero valido:"); return S_INV_MANUAL
     await try_del(u.message)
     name = s.get("_adding_undef","")
     if name: s["inv_stakes"][name] = amt; s["_adding_undef"] = ""
@@ -636,7 +635,7 @@ async def r_pd_action(u:Update, ctx):
         g = next((x for x in ctx.user_data.get("pd_groups",[]) if x["id"]==ctx.user_data.get("pd_gid","")), {})
         await q.edit_message_text(f"⚠️ ¿Eliminar *{g.get('descr','')}*?",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🗑 Sí", callback_data="pdel_yes"),
+                InlineKeyboardButton("🗑 Si", callback_data="pdel_yes"),
                 InlineKeyboardButton("↩ No",  callback_data="pdel_no")
             ]]), parse_mode="Markdown")
         return P_DEL
@@ -675,7 +674,7 @@ async def r_exact_btn(u:Update, ctx):
 
 async def r_exact_txt(u:Update, ctx):
     try: ret = float(u.message.text.strip().replace(",",".")); assert ret >= 0
-    except: await u.message.reply_text("⚠️ Número válido:"); return P_EXACT
+    except: await u.message.reply_text("⚠️ Numero valido:"); return P_EXACT
     await try_del(u.message)
     tickets = ctx.user_data.get("pd_tickets",[]); idx = ctx.user_data.get("pd_idx",0)
     ctx.user_data["pd_returns"][tickets[idx]["id"]] = ret

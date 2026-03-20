@@ -114,7 +114,7 @@ Notas importantes:
                     "content-type": "application/json",
                 },
                 json={
-                    "model": "claude-haiku-4-5",
+                    "model": "claude-haiku-4-5-20251001",
                     "max_tokens": 512,
                     "messages": [{
                         "role": "user",
@@ -126,6 +126,9 @@ Notas importantes:
                 }
             )
         data = r.json()
+        text = ""
+        if "content" not in data:
+            return {"error": f"API error: {data.get('error', {}).get('message', str(data)[:200])}"}
         text = data["content"][0]["text"].strip()
         # Strip markdown code blocks if present
         text = re.sub(r"```(?:json)?", "", text).strip().rstrip("```").strip()

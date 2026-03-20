@@ -454,15 +454,25 @@ async def handle_photo_bookie(u: Update, ctx):
         tickets = []
         for t in tickets_raw:
             try:
-                monto = float(t.get("monto",0)); cuota = float(t.get("cuota",0))
-                if monto>0 and cuota>1:
-                    stake = round(monto*EUR,2) if wnx else monto
-                    pot   = round(stake*cuota,2)
+                # Handle both float and string with commas
+                raw_monto = t.get("monto",0)
+                raw_cuota = t.get("cuota",0)
+                monto = float(str(raw_monto).replace(",",".").replace("€","").strip())
+                cuota = float(str(raw_cuota).replace(",",".").strip())
+                if monto > 0 and cuota > 1:
+                    stake = round(monto * EUR, 2) if wnx else monto
+                    pot   = round(stake * cuota, 2)
                     tickets.append({"stake":stake,"cuota":cuota,"potencial":pot,
                         "bookie":bk,"tipster":s["tipster"],"eur":monto if wnx else None})
+                elif monto > 0 and cuota <= 0:
+                    # cuota missing — skip
+                    pass
             except: pass
         if not tickets:
-            await q.edit_message_text("⚠️ No se detectaron tickets válidos."); return
+            # Show raw data for debugging
+            raw_str = str(tickets_raw)[:200]
+            await q.edit_message_text(f"⚠️ No se detectaron tickets válidos.\n\n_Debug:_ `{raw_str}`",
+                parse_mode="Markdown"); return
         s["bookies"].append({"bookie":bk,"tickets":tickets})
         # Calculate auto inv stakes
         total_stake = sum(t["stake"] for t in tickets)
